@@ -1,0 +1,1 @@
+{"id":"browser-001","steps":[{"v":"openTab","url":"https://example.com"},{"v":"query","tab":{"url":"https://example.com/*"},"sel":"h1","text":true}]}

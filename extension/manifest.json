@@ -1,0 +1,39 @@
+{
+  "manifest_version": 3,
+  "name": "Remote Mesh",
+  "version": "0.1.0",
+  "description": "Yerel veya bulut NATS üzerinden profil bazlı uzak tarayıcı komutları.",
+  "permissions": [
+    "tabs",
+    "scripting",
+    "storage",
+    "alarms",
+    "identity",
+    "userScripts",
+    "clipboardWrite"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "minimum_chrome_version": "120",
+  "options_page": "options.html",
+  "action": {
+    "default_title": "Remote Mesh bağlantı ayarları"
+  },
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAm93FDX7RKgrf/dcU/T+c0U4M82O/Ko7JxYXOPpYfCQ3G/hOO8U5kzvmelI6muK6wF64lz8HXk+RwFok2fev8lfZpkhRwVHFuo+qWTPGNj/e/lFOg1s3KQOA5qaVM51SVy4znTKQeUdTYZAH/3r0TJmylej7XfGJxihOPlEYw3sK3lcoMGHSI9T5ssgwNLAX9FBbY8Tb4xAB7uWKGWDiMn8o1FwC1Cc2oEQfeGE71igl78bkH7h79rkJN2iPT6FBDMMK0fATHEqOwO8B2eM/AgkAx5J0Oq6FumUjn+MNBLw19HWttpY0nKcZ9XDaJ1yBE0xkhFRlkguBKktDaWOQtewIDAQAB"
+}

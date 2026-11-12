@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="tr"><meta charset="utf-8"><title>Remote Mesh</title>
+<link rel="stylesheet" href="options.css">
+<main><p class="eyebrow">REMOTE MESH / NATS</p><h1>Tarayıcını bağla</h1>
+<p>Yerel ağdaki veya buluttaki NATS sunucusuna bu profilden bağlan.</p>
+<div class="status"><span id="status">Durum okunuyor…</span><code id="inst"></code></div>
+<form id="settings">
+<label>Profil etiketi<input name="label" placeholder="İş bilgisayarı · Chrome 1"></label>
+<label>NATS WebSocket adresi<input name="url" required placeholder="ws://127.0.0.1:8222"></label>
+<p class="hint">Yerel: ws://SUNUCU:8222 · Bulut: wss://SUNUCU:PORT. TCP ve monitoring portları WebSocket değildir.</p>
+<label>Konu öneki<input name="prefix" required value="mesh.browser"></label>
+<fieldset><legend>Kimlik doğrulama (tek yöntem seç)</legend>
+<label>Token<input name="token" type="password" autocomplete="off"></label>
+<div class="row"><label>Kullanıcı<input name="user" autocomplete="off"></label><label>Parola<input name="pass" type="password" autocomplete="off"></label></div>
+<label>NGS / NATS .creds içeriği<textarea name="creds" rows="3" spellcheck="false" autocomplete="off"></textarea></label>
+<p class="hint">Kimlik bilgileri yalnızca bu profilin yerel eklenti deposunda tutulur; Chrome Sync'e gönderilmez. Bu depo bir işletim sistemi parola kasası değildir.</p>
+</fieldset>
+<label class="check"><input type="checkbox" name="enabled"> Uzaktan bağlantıyı etkinleştir</label>
+<button type="submit">Kaydet ve bağlan</button><span id="feedback" role="status"></span>
+</form><p class="hint">Komutlar seçilen NATS hesabının konu izinleriyle yetkilendirilir. Her profil ayrı kimlik alır. Çalışan komutu durdurma isteği adım sınırında uygulanır.</p>
+</main><script type="module" src="options.js"></script></html>

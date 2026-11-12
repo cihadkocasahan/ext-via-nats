@@ -1,0 +1,26 @@
+{
+  "name": "remote-mesh-extension",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "node --test tests/*.test.mjs",
+    "remote": "node scripts/remote.mjs",
+    "mcp": "node scripts/mcp.mjs",
+    "nats:local": "node scripts/nats-local.mjs start",
+    "nats:stop": "node scripts/nats-local.mjs stop",
+    "node-agent": "node scripts/node-agent.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "@nats-io/nats-core": "^3.4.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2"
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "remote-mesh": {
+      "command": "node",
+      "args": ["/absolute/path/RemoteMeshExtension/scripts/mcp.mjs"],
+      "env": { "REMOTE_MESH_URL": "ws://127.0.0.1:18222" }
+    }
+  }
+}

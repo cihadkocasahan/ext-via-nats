@@ -1,0 +1,39 @@
+<!doctype html>
+<!--
+  harness.html — the provenance marker and (later) the approval surface.
+
+  A window carrying a tab of this page is a window the relay opened. `close`
+  reads ownership back from here instead of guessing from timestamps, so a
+  window the operator opened in the same profile can never be mistaken for
+  ours, and one we opened stays identifiable across a restart.
+
+  It is also the only surface in this extension where a human can be asked to
+  approve something: content scripts do not run on extension pages, so a picker
+  has to live here rather than in a tab's DOM.
+-->
+<meta charset="utf-8">
+<title>Agent Relay</title>
+<style>
+  body { font: 13px/1.5 system-ui, sans-serif; margin: 24px; color: #202124; }
+  h1 { font-size: 15px; margin: 0 0 12px; }
+  dl { display: grid; grid-template-columns: max-content 1fr; gap: 2px 12px; margin: 0; }
+  dt { color: #5f6368; }
+  dd { margin: 0; font-family: ui-monospace, Consolas, monospace; word-break: break-all; }
+  .run { margin-top: 16px; padding: 8px 10px; background: #f1f3f4; border-radius: 6px; }
+</style>
+<h1>Agent Relay oturum işareti</h1>
+<p>Bu sekme pencerenin relay tarafından açıldığını belirtir. Kapatabilirsin —
+  kapanması o pencereyi listesinden düşürür, başka hiçbir pencereye dokunmaz.</p>
+<dl>
+  <dt>run</dt><dd id="run">—</dd>
+  <dt>başlatan</dt><dd id="launched">—</dd>
+  <dt>görev</dt><dd id="task">—</dd>
+  <dt>amaç</dt><dd id="purpose">—</dd>
+  <dt>inst</dt><dd id="inst">—</dd>
+  <dt>sürüm</dt><dd id="ver">—</dd>
+  <dt>build</dt><dd id="build">—</dd>
+  <dt>hesap</dt><dd id="acct">—</dd>
+  <dt>pencereler</dt><dd id="wins">—</dd>
+</dl>
+<div class="run" id="note">kayıt bekleniyor…</div>
+<script src="harness.js"></script>
