@@ -60,12 +60,18 @@ try {
   await page.goto(`chrome-extension://${extensionId}/options.html`);
   await page.locator('input[name=url]').waitFor();
   await until(async () => (await page.locator('input[name=url]').inputValue()).length > 0);
+  // A retained test profile may already hold identical settings. Force a real
+  // disable/enable transition so initial broker startup cannot leave a stale state.
+  await page.locator('input[name=enabled]').uncheck();
+  await page.getByRole('button', { name: 'Kaydet ve bağlan' }).click();
+  await page.locator('#status').filter({ hasText: /^Bağlantı kapalı$/ }).waitFor({ timeout: 15000 });
   await page.locator('input[name=url]').fill(env.REMOTE_MESH_URL);
   await page.locator('input[name=prefix]').fill(env.REMOTE_MESH_PREFIX);
   await page.locator('input[name=label]').fill('Debian live acceptance');
   await page.locator('input[name=enabled]').check();
   await page.getByRole('button', { name: 'Kaydet ve bağlan' }).click();
-  await page.locator('#status').filter({ hasText: /^Bağlı$/ }).waitFor({ timeout: 15000 });
+  try { await page.locator('#status').filter({ hasText: /^Bağlı$/ }).waitFor({ timeout: 15000 }); }
+  catch { throw new Error('Options connection state: ' + await page.locator('#status').textContent()); }
   report.checks.push('options-ui-and-nats-connection');
   const inst = (await page.locator('#inst').textContent()).replace('Profil kimliği: ', '').trim();
   report.inst = inst;
