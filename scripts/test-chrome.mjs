@@ -95,17 +95,24 @@ try {
   const details = await context.newPage();
   await details.goto(`chrome://extensions/?id=${extensionId}`);
   await details.locator('extensions-detail-view').waitFor();
-  const candidates = await details.locator('extensions-detail-view').locator('cr-toggle').evaluateAll(toggles => toggles.map(t => ({ id: t.id, label: t.getAttribute('aria-label'), text: t.parentElement?.textContent?.trim().slice(0,160) })));
+  const candidates = await details.locator('extensions-detail-view').locator('cr-toggle').evaluateAll(toggles => toggles.map(t => {
+    const owner = t.getRootNode().host;
+    return { id: t.id, label: t.getAttribute('aria-label'), owner: owner?.id, text: owner?.textContent?.trim().slice(0,200) };
+  }));
   report.scriptToggles = candidates;
   const scriptsToggle = details.locator('extensions-detail-view').locator('cr-toggle').filter({ visible: true });
   const allToggles = await scriptsToggle.count();
   for (let i = 0; i < allToggles; i++) {
     const toggle = scriptsToggle.nth(i);
-    const label = await toggle.evaluate(t => (t.getAttribute('aria-label') || '') + ' ' + (t.parentElement?.textContent || ''));
-    if (/user scripts|kullanıcı (?:komut dosy|script)/i.test(label) && await toggle.getAttribute('aria-pressed') !== 'true' && !await toggle.evaluate(t => !!t.checked)) await toggle.click();
+    const label = await toggle.evaluate(t => { const host = t.getRootNode().host; return [t.getAttribute('aria-label'), host?.id, host?.textContent].join(' '); });
+    if (/user.?scripts|kullanıcı.*(?:komut|script)/i.test(label) && !await toggle.evaluate(t => !!t.checked)) await toggle.click();
   }
   await details.close();
-  const info = await tool('remote_mesh_info', { inst });
+  // Chrome exposes newly granted userScripts access to fresh extension contexts.
+  const restarted = context.waitForEvent('serviceworker', { timeout: 15000 });
+  await command([{ v: 'reload' }]);
+  await restarted;
+  await until(async () => { try { return (await control.request(inst, 'info', {}, 1000)).inst === inst; } catch { return false; } });
   const query = await command([{ v: 'query', tab, sel: 'h1' }]);
   assert.equal(query.receipts[0].count, 1);
   // Resolve the exact fixture tab through the extension executor instead of CDP IDs.

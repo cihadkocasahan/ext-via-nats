@@ -185,6 +185,35 @@ entegrasyon testi kendi Docker broker'ı yerine o test broker'ını kullanır;
 Gerçek Chrome profilinde kurulum/DOM/JS/başlatma ve WAN/cloud kabulü ayrıca
 yapılmalıdır; taklit Chrome testleri bunların yerini tutmaz.
 
+### Ayrı profilde canlı Chrome testi
+
+`npm run test:chrome` kurulu Chrome üzerinde gerçek MCP → NATS → eklenti akışını
+dener. `playwright-core` yalnızca bu testin geliştirme bağımlılığıdır; Chrome
+indirmez ve ürünün MCP/CLI/node çalışma yolu tarafından kullanılmaz. Ürün
+kurulumunda test/derleme gerekmiyorsa `npm ci --omit=dev` yeterlidir; derlenmiş
+eklenti depoda bulunur.
+
+Linux örneği (Node ve Chrome kurulu olmalı):
+
+```bash
+export CHROME_PATH=/opt/google/chrome/google-chrome
+export REMOTE_MESH_URL=ws://127.0.0.1:18222
+npm run test:chrome
+```
+
+Broker hazır değilse `NATS_SERVER_PATH` ile yerel `nats-server` binary'sini ver;
+test yalnız loopback'te geçici broker başlatır ve sonunda durdurur. Windows'ta
+aynı değişkenleri PowerShell `$env:...` ile ayarla, Chrome executable yolunu kullan.
+Linux grafik oturumunda `DISPLAY` ve gerekiyorsa `XAUTHORITY` doğru olmalıdır.
+
+Test `.local/chrome-live-profile` altında ayrı bir Chrome profili kullanır;
+mevcut kullanıcı profillerini açmaz/kapatmaz. Test yüklemesi için Chrome'un
+`--enable-unsafe-extension-debugging` bayrağı yalnız bu ayrı sürece verilir.
+Yerel boş fixture sayfasında form, click, DOM içi değer aktarımı, inject, user
+script ve node üzerinden işaretli pencere açma/cleanup sınanır. Sonuçlar
+`.local/chrome-live-report.json`, ekran kanıtı `.local/chrome-live-proof.png`
+içine yazılır. Bunlar Git'e eklenmez.
+
 Teknik referanslar: [NATS WebSocket istemcisi](https://nats-io.github.io/nats.js/core/index.html),
 [Chrome WebSocket worker ömrü](https://developer.chrome.com/docs/extensions/how-to/web-platform/websockets),
 [Chrome userScripts](https://developer.chrome.com/docs/extensions/reference/api/userScripts),
