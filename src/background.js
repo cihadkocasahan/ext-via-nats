@@ -5,7 +5,7 @@ import { DEFAULTS, validateConfig, validateCommand, subjects } from './protocol.
 let nc, config, topic, active = null, connecting = null, generation = 0;
 const encoder = new TextEncoder();
 const encode = x => encoder.encode(JSON.stringify(x));
-const status = (state, error = null) => chrome.storage.session.set({ meshStatus: { state, error, at: Date.now() } });
+const status = (state, error = null) => chrome.storage.session.set({ extViaNatsStatus: { state, error, at: Date.now() } });
 const emit = (subject, data) => { if (nc && !nc.isClosed()) nc.publish(subject, encode(data)); };
 const ready = initExecutor({
   announce: info => topic && emit(topic.register, { ...info, label: config.label }),
@@ -27,22 +27,22 @@ async function handleCommand(msg) {
   active = cmd.id; // reserve before any asynchronous storage operation
   try {
     const hash = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', encode(cmd)))).map(b => b.toString(16).padStart(2, '0')).join('');
-    const { meshLedger = {} } = await chrome.storage.local.get('meshLedger');
-    const previous = Object.hasOwn(meshLedger, cmd.id) ? meshLedger[cmd.id] : null;
+    const { extViaNatsLedger = {} } = await chrome.storage.local.get('extViaNatsLedger');
+    const previous = Object.hasOwn(extViaNatsLedger, cmd.id) ? extViaNatsLedger[cmd.id] : null;
     if (previous) {
       await respond(msg, previous.hash !== hash ? { ok: false, id: cmd.id, code: 'id_conflict' }
         : previous.result || { ok: false, id: cmd.id, code: 'interrupted', error: 'Önceki çalışmanın sonucu belirsiz; otomatik tekrar çalıştırılmadı.' });
       return;
     }
     // At-most-once per retained id: persist intent BEFORE executing a browser action.
-    const ledger = Object.fromEntries(Object.entries(meshLedger).slice(-99));
+    const ledger = Object.fromEntries(Object.entries(extViaNatsLedger).slice(-99));
     ledger[cmd.id] = { hash, at: Date.now() };
-    await chrome.storage.local.set({ meshLedger: ledger });
+    await chrome.storage.local.set({ extViaNatsLedger: ledger });
     emit(topic.stream, { id: cmd.id, phase: 'started' });
     const result = { id: cmd.id, ...await execute(cmd) };
     result.ok = !result.err && !result.aborted && result.receipts.every(r => r.ok);
     ledger[cmd.id].result = result;
-    await chrome.storage.local.set({ meshLedger: ledger });
+    await chrome.storage.local.set({ extViaNatsLedger: ledger });
     emit(topic.stream, { id: cmd.id, phase: 'done', ok: result.ok });
     await respond(msg, result);
   } catch {
@@ -65,13 +65,13 @@ async function start() {
   const ticket = generation;
   connecting = (async () => {
     await storageReady;
-    const { meshConfig } = await chrome.storage.local.get('meshConfig');
-    config = validateConfig(meshConfig || DEFAULTS);
+    const { extViaNatsConfig } = await chrome.storage.local.get('extViaNatsConfig');
+    config = validateConfig(extViaNatsConfig || DEFAULTS);
     if (!config.enabled) { await status('disabled'); return; }
     await status('connecting');
     const id = await ready;
     topic = subjects(config.prefix, id);
-    const client = await wsconnect({ servers: config.url, name: `remote-mesh-${id}`, timeout: 5000,
+    const client = await wsconnect({ servers: config.url, name: `ext-via-nats-${id}`, timeout: 5000,
       pingInterval: 15000, maxReconnectAttempts: -1, reconnectTimeWait: 2000,
       ignoreServerUpdates: true,
       ...(config.creds ? { authenticator: credsAuthenticator(encoder.encode(config.creds)) }
@@ -104,7 +104,7 @@ async function start() {
   return connecting;
 }
 chrome.storage.onChanged.addListener((changes, area) => {
-  if (area !== 'local' || !changes.meshConfig) return;
+  if (area !== 'local' || !changes.extViaNatsConfig) return;
   generation++;
   if (active) abortCommand(active);
   void (async () => { if (nc) await nc.close(); nc = null; if (connecting) await connecting; await start(); })();
@@ -112,7 +112,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
 chrome.action.onClicked.addListener(() => chrome.runtime.openOptionsPage());
 chrome.runtime.onStartup.addListener(() => { void start(); });
 chrome.runtime.onInstalled.addListener(() => { void start(); });
-chrome.alarms.create('mesh-reconnect', { periodInMinutes: 0.5 });
-chrome.alarms.onAlarm.addListener(a => { if (a.name === 'mesh-reconnect') void start(); });
+chrome.alarms.create('ext-via-nats-reconnect', { periodInMinutes: 0.5 });
+chrome.alarms.onAlarm.addListener(a => { if (a.name === 'ext-via-nats-reconnect') void start(); });
 setInterval(() => { void heartbeat().catch(() => {}); }, 5000);
 void start();

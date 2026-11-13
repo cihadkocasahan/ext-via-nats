@@ -1,7 +1,0 @@
-{
-  "nodeId": "windows-workstation",
-  "label": "Windows Chrome",
-  "chromePath": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
-  "extensionId": "ncfgllpgnoapgbomonfhbmhlcffmmnba",
-  "userDataPaths": ["C:\\Users\\YOUR_USER\\AppData\\Local\\Google\\Chrome\\User Data"]
-}

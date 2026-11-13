@@ -1,8 +1,7 @@
-// content.js — isolated-world verb executor for Agent Relay.
-// Receives ops from background.js via chrome.runtime/tabs messaging.
-// Never exposes raw secret values: readRaw is used only by the SW to move
-// values tab-to-tab; every reply that leaves the browser is stripped to
-// {ok, len, tail4}.
+// content.js — isolated-world verb executor.
+// Receives ops from background.js via chrome.runtime/tabs messaging, in the top
+// frame or in a named iframe. Never exposes raw secret values: readRaw is used
+// only by the SW to move values tab-to-tab; receipts carry length, not content.
 
 // executeScript re-runs THIS file into an isolated world that may already hold
 // an older copy (tabs that survived an extension reload). Unwrapped, the re-run
@@ -13,13 +12,12 @@
 'use strict';
 const GEN = globalThis.__arGen = (globalThis.__arGen || 0) + 1;
 
-// A profile that no one has activated in this browser run keeps its service
-// worker frozen, and an agent cannot click reload in another profile's
-// chrome://extensions. Content scripts, though, are injected by the browser
-// itself — so opening our own relayd page in that profile is enough to wake the
-// worker. Nothing on any third-party page sends this.
-if (/^http:\/\/127\.0\.0\.1:8712\/wake$/.test(location.href)) {
-  try { chrome.runtime.sendMessage({ type: 'wake' }); } catch (e) {}
+// A media URL is often pre-signed: the query carries the token that authorises
+// the stream. Origin + path identifies the source without exporting it.
+function mediaSrc(el) {
+  const raw = String(el.currentSrc || el.src || '');
+  try { const u = new URL(raw, location.href); return (u.origin + u.pathname).slice(0, 200); }
+  catch (_) { return raw.slice(0, 200); }
 }
 
 function setNativeValue(el, value) {
@@ -55,12 +53,11 @@ function applyMask(el) {
 // Our own injected affordances (data-ar-node) are skipped: their labels echo
 // page text, and a gate that matched one would pass without the real element
 // being there. Assert on those nodes by CSS id when you mean them.
-// A page can render the same label twice and put the invisible one FIRST.
-// Measured on DeepSeek's sign-in form: two spans reading "Google ile Giriş Yap",
-// a visibility:hidden measuring copy at 297,594 and the real button content at
-// 350,603. Matching the copy made `assert text=Google` pass and `click` fire on
-// a node with no listeners — ok:true, page unmoved. Same fail-open family as the
-// HUD echo: a gate must never pass on something the user cannot see.
+// A page can render the same label twice and put the invisible one FIRST:
+// a visibility:hidden measuring copy alongside the real button content.
+// Matching the copy makes `assert text=…` pass and `click` fire on a node with
+// no listeners — ok:true, page unmoved. Same fail-open family as the HUD echo:
+// a gate must never pass on something the user cannot see.
 function isVisible(el) {
   if (!el || !el.isConnected) return false;
   if (el.closest('[aria-hidden="true"]')) return false;
@@ -124,9 +121,9 @@ function byText(needle) {
 // captcha" while a human was being asked to slide something.
 // Our own warning banner carries data-ar-node and is excluded, or the gate
 // would detect itself and never clear — the same fail-open family as the HUD.
-// isVisible() answers "is it rendered", not "can a person see it here". The
-// DeepSeek sign-in page PRELOADS a captcha iframe off-screen at y=-9999 that is
-// still 320x400 and passes isVisible — matching it would gate every run on a
+// isVisible() answers "is it rendered", not "can a person see it here". A
+// sign-in page can PRELOAD a captcha iframe off-screen at y=-9999 that is still
+// 320x400 and passes isVisible — matching it would gate every run on a
 // challenge nobody was shown. So anything generic must clear the viewport too.
 function onScreen(el) {
   const r = el.getBoundingClientRect();
@@ -138,11 +135,10 @@ function onScreen(el) {
 function captchaKind() {
   // Scan EVERY candidate frame, not just the first match in document order.
   // `first()` prefers the first VISIBLE match; document.querySelector does not,
-  // and the DeepSeek sign-in page keeps a hidden preload of the same hCaptcha
-  // frame EARLIER in the DOM. Measured: with the challenge live and on screen
-  // (a click on this very selector reported vis:true at [162,270,320,400]),
-  // `captcha` still answered present:false — the probe examined the hidden
-  // preload and stopped. Answering "no challenge" while a human is looking at
+  // and a page can keep a hidden preload of the same challenge frame EARLIER in
+  // the DOM. With the challenge live and on screen, a probe that examines the
+  // hidden preload and stops answers present:false. Answering "no challenge"
+  // while a human is looking at
   // one is the fail-open family this file keeps paying for.
   const frames = document.querySelectorAll(
     'iframe[src*="recaptcha" i],iframe[src*="hcaptcha" i],iframe[src*="geetest" i],' +
@@ -272,11 +268,10 @@ function first(sel) {
     let q = s.trim();
     if (!q) continue;
     // `last=` picks the LAST match instead of the first. A chat transcript
-    // renders one .ds-markdown per answer, so a first-match gate reads the
-    // OLDEST one: measured, a completion gate reported len:140 twice while the
-    // new answer was still streaming — it was measuring the previous answer.
-    // Same fail-open family as the invisible duplicate: a gate has to measure
-    // the thing this run just produced.
+    // renders one node per answer, so a first-match gate reads the OLDEST one:
+    // a completion gate can report the previous answer's length twice while the
+    // new answer is still streaming. Same fail-open family as the invisible
+    // duplicate: a gate has to measure the thing this run just produced.
     let wantLast = false;
     if (q.slice(0, 5).toLowerCase() === 'last=') { wantLast = true; q = q.slice(5).trim(); }
     const named = /^\[textContent\s*=\s*["'](.+)["']\]$/.exec(q);
@@ -303,11 +298,10 @@ function first(sel) {
     if (!all.length) {
       try { all = Array.from(document.querySelectorAll('[data-testid="' + q + '"]')); } catch (_) {}
     }
-    // Prefer what the operator can see. Measured: `[id*=add]` on the Agent2API
-    // panel resolved to button#rail-add-custom with vis:false and a 0x0 box, so
-    // `click` fired on a hidden button and reported ok:true. The unfiltered
-    // first match stays as a fallback, because `assert` on a hidden element and
-    // `fill` on a hidden input are both legitimate.
+    // Prefer what the operator can see: a loose `[id*=add]` can resolve to a
+    // hidden 0x0 button, and `click` on it reports ok:true with nothing moving.
+    // The unfiltered first match stays as a fallback, because `assert` on a
+    // hidden element and `fill` on a hidden input are both legitimate.
     const vis = all.filter(isVisible);
     const pool = vis.length ? vis : all;
     const el = wantLast ? pool[pool.length - 1] : pool[0];
@@ -317,7 +311,7 @@ function first(sel) {
 }
 
 // How many nodes a selector matches. `waitFor grow:true` needs this: a chat
-// transcript already holds every previous answer, so "does .ds-markdown exist"
+// transcript already holds every previous answer, so "does the answer node exist"
 // is true before the new answer arrives and the gate passes on the old one.
 function countMatches(sel) {
   // one implementation, so `waitFor grow:true` and `query` can never disagree
@@ -552,10 +546,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           // A browser-side source. `sel` may name a store instead of an element:
           //   localStorage:KEY[#dotted.path]  sessionStorage:KEY[#…]  cookie:NAME
           // The value is read inside the tab and handed to the SW, which writes
-          // it into the destination tab. It never reaches relayd or the agent —
-          // same channel as a field-to-field relay, different source.
-          // DeepSeek keeps its token as JSON in localStorage.userToken with the
-          // token in .value, which is why a path is supported.
+          // it into the destination tab. It never reaches the controller or the
+          // agent — same channel as a field-to-field relay, different source.
+          // A site may keep a token as JSON in localStorage with the value at a
+          // nested key, which is why a dotted path is supported.
           const store = /^(localStorage|sessionStorage|cookie):([^#]+)(?:#(.+))?$/.exec(String(msg.sel || ''));
           if (store) {
             const kind = store[1], key = store[2].trim(), path = store[3];
@@ -612,8 +606,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         }
 
         // The mirror of readRaw: nothing could WRITE a browser-side store, so
-        // ending a session meant walking the site's own menus — and on
-        // chat.deepseek.com that menu is not reachable from here at all.
+        // ending a session meant walking the site's own menus — and some sites
+        // do not expose that menu to a script at all.
         // `remove:true` deletes, `*` clears the whole store (or every
         // JS-visible cookie). Receipt carries counts, never a value.
         // HttpOnly cookies are outside a page's reach; that is a limit, so the
@@ -701,6 +695,212 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             setTimeout(() => { node.textContent = msg.text || msg.html || '⚡ Relay'; }, 2000);
           });
           return sendResponse({ ok: true, anchored: !!(src && src.parentElement) });
+        }
+
+        // ── pointer verbs ──────────────────────────────────────────────
+        // hover fires the mouse family without a click. Sites that reveal a
+        // control on hover (menu, player overlay, preroll skip) never see a
+        // click first, so a click-only toolkit cannot open them.
+        case 'hover': {
+          const el = first(msg.sel);
+          if (!el) return sendResponse({ ok: false, error: 'hover: no element' });
+          el.scrollIntoView({ block: 'center' });
+          const r = el.getBoundingClientRect();
+          const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+          const mk = t => new MouseEvent(t, { bubbles: t !== 'mouseenter', cancelable: true,
+            view: window, clientX: cx, clientY: cy, screenX: cx, screenY: cy });
+          el.dispatchEvent(mk('mouseover'));
+          el.dispatchEvent(mk('mouseenter'));
+          el.dispatchEvent(mk('mousemove'));
+          return sendResponse({ ok: true, hit: describe(el) });
+        }
+
+        case 'dblclick': {
+          const el = first(msg.sel);
+          if (!el) return sendResponse({ ok: false, error: 'dblclick: no element' });
+          el.scrollIntoView({ block: 'center' });
+          const mk = t => new MouseEvent(t, { bubbles: true, cancelable: true, view: window, detail: t === 'dblclick' ? 2 : 1 });
+          for (const t of ['mousedown', 'mouseup', 'click', 'mousedown', 'mouseup', 'click', 'dblclick']) el.dispatchEvent(mk(t));
+          return sendResponse({ ok: true, hit: describe(el) });
+        }
+
+        case 'rightClick': {
+          const el = first(msg.sel);
+          if (!el) return sendResponse({ ok: false, error: 'rightClick: no element' });
+          el.scrollIntoView({ block: 'center' });
+          const mk = t => new MouseEvent(t, { bubbles: true, cancelable: true, view: window, button: 2, buttons: 2, detail: 1 });
+          el.dispatchEvent(mk('mousedown'));
+          el.dispatchEvent(mk('mouseup'));
+          el.dispatchEvent(mk('contextmenu'));
+          return sendResponse({ ok: true, hit: describe(el) });
+        }
+
+        // Native mouse drag: pointer/mouse events, for sliders, canvases and
+        // sortable handles that listen on mousemove rather than HTML5 dnd.
+        case 'mouseDrag': {
+          const el = first(msg.sel);
+          if (!el) return sendResponse({ ok: false, error: 'mouseDrag: no element' });
+          el.scrollIntoView({ block: 'center' });
+          const r = el.getBoundingClientRect();
+          const sx = r.left + r.width / 2, sy = r.top + r.height / 2;
+          const dx = Number(msg.dx) || 0, dy = Number(msg.dy) || 0;
+          const mk = (t, x, y, btns) => new MouseEvent(t, { bubbles: true, cancelable: true, view: window,
+            clientX: x, clientY: y, button: 0, buttons: btns, detail: 1 });
+          el.dispatchEvent(mk('mousedown', sx, sy, 1));
+          const steps = Math.max(4, Math.min(30, Number(msg.moves) || 8));
+          for (let k = 1; k <= steps; k++) {
+            const x = sx + dx * k / steps, y = sy + dy * k / steps;
+            el.dispatchEvent(mk('mousemove', x, y, 1));
+          }
+          el.dispatchEvent(mk('mouseup', sx + dx, sy + dy, 0));
+          return sendResponse({ ok: true, from: [Math.round(sx), Math.round(sy)], to: [Math.round(sx + dx), Math.round(sy + dy)] });
+        }
+
+        // HTML5 drag-and-drop between two nodes (sortable lists, upload zones).
+        case 'drag': {
+          const src = first(msg.from && msg.from.sel);
+          const dst = first(msg.to && msg.to.sel);
+          if (!src) return sendResponse({ ok: false, error: 'drag: source not found' });
+          if (!dst) return sendResponse({ ok: false, error: 'drag: target not found' });
+          const dt = new DataTransfer();
+          const fire = (el, type) => el.dispatchEvent(new DragEvent(type, { bubbles: true, cancelable: true, composed: true, dataTransfer: dt }));
+          fire(src, 'dragstart');
+          fire(dst, 'dragenter');
+          fire(dst, 'dragover');
+          const handled = !fire(dst, 'drop'); // a handler that preventDefault'd it took the file
+          fire(src, 'dragend');
+          return sendResponse({ ok: true, handled, from: describe(src), to: describe(dst) });
+        }
+
+        // File upload without touching the local filesystem: the bytes are
+        // built here from an http/data URL or literal text. Works on a file
+        // input by assigning .files, and on a drop zone by synthesising the
+        // drag events an OS drag would produce.
+        case 'uploadFile': {
+          const el = first(msg.sel);
+          if (!el) return sendResponse({ ok: false, error: 'uploadFile: no element' });
+          const name = msg.name || 'file.txt';
+          let mime = msg.mime || 'application/octet-stream';
+          let blob;
+          try {
+            if (msg.dataUrl) {
+              const m = /^data:([^;,]*)?(;base64)?,(.*)$/.exec(msg.dataUrl);
+              if (!m) throw new Error('bad dataUrl');
+              const bin = m[2] ? atob(m[3]) : decodeURIComponent(m[3]);
+              const arr = new Uint8Array(bin.length);
+              for (let k = 0; k < bin.length; k++) arr[k] = bin.charCodeAt(k);
+              if (m[1]) mime = m[1];
+              blob = new Blob([arr], { type: mime });
+            } else if (msg.url) {
+              const res = await fetch(msg.url);
+              if (!res.ok) throw new Error('fetch ' + res.status);
+              blob = await res.blob();
+              if (!msg.mime && blob.type) mime = blob.type;
+            } else {
+              blob = new Blob([String(msg.text ?? '')], { type: mime });
+            }
+          } catch (e) { return sendResponse({ ok: false, error: 'uploadFile: ' + (e && e.message || e) }); }
+          const file = new File([blob], name, { type: mime });
+          const dt = new DataTransfer();
+          dt.items.add(file);
+          let setFiles = false;
+          const input = el.tagName === 'INPUT' ? el : el.querySelector('input[type=file]');
+          if (input) { try { input.files = dt.files; input.dispatchEvent(new Event('change', { bubbles: true })); setFiles = true; } catch (_) {} }
+          const fire = t => el.dispatchEvent(new DragEvent(t, { bubbles: true, cancelable: true, composed: true, dataTransfer: dt }));
+          fire('dragenter'); fire('dragover');
+          const handled = !fire('drop');
+          return sendResponse({ ok: true, name, bytes: blob.size, via: input ? 'input' : 'drop', setFiles, dropped: handled });
+        }
+
+        // ── form control ───────────────────────────────────────────────
+        case 'select': {
+          const el = first(msg.sel);
+          if (!el) return sendResponse({ ok: false, error: 'select: no element' });
+          if (el.tagName !== 'SELECT') return sendResponse({ ok: false, error: 'select: target is <' + el.tagName.toLowerCase() + '>, not <select>' });
+          const opts = Array.from(el.options);
+          let opt = null;
+          if (msg.index != null) opt = opts[Number(msg.index)] || null;
+          else if (msg.value != null) opt = opts.find(o => o.value === String(msg.value)) || null;
+          else if (msg.label != null) opt = opts.find(o => o.text.trim() === String(msg.label)) || opts.find(o => o.text.includes(String(msg.label))) || null;
+          if (!opt) return sendResponse({ ok: false, error: 'select: no matching option', count: opts.length });
+          el.value = opt.value;
+          el.dispatchEvent(new Event('input', { bubbles: true }));
+          el.dispatchEvent(new Event('change', { bubbles: true }));
+          return sendResponse({ ok: true, index: opts.indexOf(opt), count: opts.length });
+        }
+
+        // ── scrolling ──────────────────────────────────────────────────
+        case 'scroll': {
+          if (msg.sel) {
+            const el = first(msg.sel);
+            if (!el) return sendResponse({ ok: false, error: 'scroll: no element' });
+            const align = msg.align === 'top' ? 'start' : (msg.align === 'bottom' ? 'end' : 'center');
+            el.scrollIntoView({ block: align, inline: 'nearest' });
+            const r = el.getBoundingClientRect();
+            return sendResponse({ ok: true, mode: 'element', box: [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)] });
+          }
+          if (Number.isFinite(msg.byY) || Number.isFinite(msg.byX)) {
+            window.scrollBy(Number(msg.byX) || 0, Number(msg.byY) || 0);
+          } else {
+            window.scrollTo(Number.isFinite(msg.x) ? msg.x : window.scrollX, Number.isFinite(msg.y) ? msg.y : window.scrollY);
+          }
+          return sendResponse({ ok: true, mode: 'window', x: Math.round(window.scrollX), y: Math.round(window.scrollY),
+            maxY: Math.round((document.documentElement.scrollHeight || 0) - window.innerHeight) });
+        }
+
+        // ── observation (explicit, opt-in page data egress) ────────────
+        case 'getText': {
+          const el = msg.sel ? first(msg.sel) : null;
+          if (msg.sel && !el) return sendResponse({ ok: false, error: 'getText: no element' });
+          const node = el || document.body || document.documentElement;
+          const full = String((node.innerText != null ? node.innerText : node.textContent) || '').trim();
+          const max = Math.max(1, Math.min(Number(msg.max) || 4000, 200000));
+          return sendResponse({ ok: true, len: full.length, truncated: full.length > max, text: full.slice(0, max) });
+        }
+
+        case 'getHTML': {
+          const el = msg.sel ? first(msg.sel) : null;
+          if (msg.sel && !el) return sendResponse({ ok: false, error: 'getHTML: no element' });
+          const node = el || document.documentElement;
+          const full = String(msg.outer === false ? node.innerHTML : node.outerHTML) || '';
+          const max = Math.max(1, Math.min(Number(msg.max) || 4000, 200000));
+          // drop masked fields' values from the markup so a DOM dump cannot
+          // launder a secret out through an attribute the mask never touched
+          const clean = full.replace(/data-ar-mask[^>]*/g, 'data-ar-mask="1"');
+          return sendResponse({ ok: true, len: clean.length, truncated: clean.length > max, html: clean.slice(0, max) });
+        }
+
+        // ── media control (video/audio), no userScripts needed ─────────
+        case 'media': {
+          const el = (msg.sel ? first(msg.sel) : null) || document.querySelector('video,audio');
+          if (!el) return sendResponse({ ok: false, error: 'media: no <video>/<audio> element' });
+          const a = msg.action || 'status';
+          try {
+            if (a === 'play') await el.play();
+            else if (a === 'pause') el.pause();
+            else if (a === 'mute') el.muted = true;
+            else if (a === 'unmute') el.muted = false;
+            else if (a === 'volume' && Number.isFinite(Number(msg.value))) el.volume = Math.max(0, Math.min(1, Number(msg.value)));
+            else if (a === 'rate' && Number.isFinite(Number(msg.value))) el.playbackRate = Number(msg.value);
+            else if (a === 'seek' && Number.isFinite(Number(msg.value))) el.currentTime = Number(msg.value);
+            else if (a === 'status') { /* read below */ }
+            else return sendResponse({ ok: false, error: 'media: unknown action ' + a });
+          } catch (e) { return sendResponse({ ok: false, error: 'media: ' + (e && e.message || e) }); }
+          return sendResponse({ ok: true, action: a, paused: !!el.paused, muted: !!el.muted, volume: el.volume,
+            rate: el.playbackRate, currentTime: el.currentTime, duration: el.duration, ended: !!el.ended,
+            readyState: el.readyState, src: mediaSrc(el) });
+        }
+
+        // ── visual debug: outline a node for a moment ──────────────────
+        case 'highlight': {
+          const el = first(msg.sel);
+          if (!el) return sendResponse({ ok: false, error: 'highlight: no element' });
+          const prev = el.style.outline, prevOff = el.style.outlineOffset;
+          el.scrollIntoView({ block: 'center' });
+          el.style.outline = '3px solid ' + (msg.color || '#e11d48');
+          el.style.outlineOffset = '2px';
+          setTimeout(() => { try { el.style.outline = prev; el.style.outlineOffset = prevOff; } catch (_) {} }, Math.min(Number(msg.ms) || 1500, 15000));
+          return sendResponse({ ok: true, hit: describe(el) });
         }
 
         default:

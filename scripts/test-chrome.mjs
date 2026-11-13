@@ -2,7 +2,7 @@
 import { chromium } from 'playwright-core';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
-import { RemoteMeshClient } from './client.mjs';
+import { ExtViaNatsClient } from './client.mjs';
 import { createServer } from 'node:http';
 import { spawn } from 'node:child_process';
 import { mkdir, writeFile, readFile } from 'node:fs/promises';
@@ -13,14 +13,14 @@ const root = path.resolve(import.meta.dirname, '..');
 const local = path.join(root, '.local');
 await mkdir(local, { recursive: true });
 if (!process.env.CHROME_PATH) throw new Error('CHROME_PATH must name an installed Chrome executable.');
-const env = { ...process.env, REMOTE_MESH_URL: process.env.REMOTE_MESH_URL || 'ws://127.0.0.1:18222', REMOTE_MESH_PREFIX: process.env.REMOTE_MESH_PREFIX || 'mesh.browser.acceptance' };
-const profilePath = path.join(local, 'chrome-live-profile');
+const env = { ...process.env, EXT_VIA_NATS_URL: process.env.EXT_VIA_NATS_URL || 'ws://127.0.0.1:18222', EXT_VIA_NATS_PREFIX: process.env.EXT_VIA_NATS_PREFIX || 'extvianats.browser.acceptance' };
+const profilePath = process.env.EXT_VIA_NATS_TEST_PROFILE || path.join(local, 'chrome-live-profile');
 const report = { platform: process.platform, at: new Date().toISOString(), checks: [], profilePath };
-let broker, context, mcp, transport, nodeAgent;
-const control = new RemoteMeshClient(env);
+let broker, context, mcp, transport;
+const control = new ExtViaNatsClient(env);
 const fixture = createServer((_req, res) => {
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
-  res.end('<!doctype html><html><meta charset="utf-8"><title>Remote Mesh acceptance</title><style>body{font:18px system-ui;margin:50px;color:#173e43}input,button{padding:12px;margin:10px}</style><h1>Remote Mesh canlı test</h1><label>İsim <input id="name"></label><button id="action">Test düğmesi</button><p id="result">Bekliyor</p><input id="source" value="fixture-private-value"><input id="dest"><script>document.querySelector("#action").onclick=()=>document.querySelector("#result").textContent="Tıklama başarılı";</script></html>');
+  res.end('<!doctype html><html><meta charset="utf-8"><title>ExtViaNats acceptance</title><style>body{font:18px system-ui;margin:50px;color:#173e43}input,button{padding:12px;margin:10px}</style><h1>ExtViaNats canlı test</h1><label>İsim <input id="name"></label><button id="action">Test düğmesi</button><p id="result">Bekliyor</p><input id="source" value="fixture-private-value"><input id="dest"><script>document.querySelector("#action").onclick=()=>document.querySelector("#result").textContent="Tıklama başarılı";</script></html>');
 });
 await new Promise(resolve => fixture.listen(0, '127.0.0.1', resolve));
 const url = `http://127.0.0.1:${fixture.address().port}/`;
@@ -41,7 +41,7 @@ async function stopChild(child) {
 }
 try {
   if (process.env.NATS_SERVER_PATH) {
-    const ws = new URL(env.REMOTE_MESH_URL);
+    const ws = new URL(env.EXT_VIA_NATS_URL);
     if (ws.hostname !== '127.0.0.1' || ws.protocol !== 'ws:') throw new Error('Managed test broker must use loopback ws.');
     const configFile = path.join(local, 'nats-live.conf');
     await writeFile(configFile, `host: "127.0.0.1"\nport: -1\nwebsocket { host: "127.0.0.1", port: ${Number(ws.port)}, no_tls: true }\n`);
@@ -63,39 +63,39 @@ try {
   // A retained test profile may already hold identical settings. Force a real
   // disable/enable transition so initial broker startup cannot leave a stale state.
   await page.locator('input[name=enabled]').uncheck();
-  await page.getByRole('button', { name: 'Kaydet ve bağlan' }).click();
-  await page.locator('#status').filter({ hasText: /^Bağlantı kapalı$/ }).waitFor({ timeout: 15000 });
-  await page.locator('input[name=url]').fill(env.REMOTE_MESH_URL);
-  await page.locator('input[name=prefix]').fill(env.REMOTE_MESH_PREFIX);
-  await page.locator('input[name=label]').fill('Debian live acceptance');
+  await page.locator('#save').click();
+  await page.locator('#status[data-state=disabled]').waitFor({ timeout: 15000 });
+  await page.locator('input[name=url]').fill(env.EXT_VIA_NATS_URL);
+  await page.locator('input[name=prefix]').fill(env.EXT_VIA_NATS_PREFIX);
+  await page.locator('input[name=label]').fill(`${process.platform} live acceptance`);
   await page.locator('input[name=enabled]').check();
-  await page.getByRole('button', { name: 'Kaydet ve bağlan' }).click();
-  try { await page.locator('#status').filter({ hasText: /^Bağlı$/ }).waitFor({ timeout: 15000 }); }
+  await page.locator('#save').click();
+  try { await page.locator('#status[data-state=connected]').waitFor({ timeout: 15000 }); }
   catch { throw new Error('Options connection state: ' + await page.locator('#status').textContent()); }
   report.checks.push('options-ui-and-nats-connection');
-  const inst = (await page.locator('#inst').textContent()).replace('Profil kimliği: ', '').trim();
+  const inst = await page.locator('#inst').getAttribute('data-inst');
   report.inst = inst;
   const discovered = await control.list(300);
   assert(discovered.some(p => p.inst === inst));
   report.checks.push('profile-discovery');
-  mcp = new Client({ name: 'remote-mesh-live-acceptance', version: '1.0.0' });
+  mcp = new Client({ name: 'ext-via-nats-live-acceptance', version: '1.0.0' });
   transport = new StdioClientTransport({ command: process.execPath, args: [path.join(root, 'scripts/mcp.mjs')], env });
   await mcp.connect(transport);
-  const command = steps => tool('remote_mesh_command', { inst, id: crypto.randomUUID(), steps });
+  const command = steps => { report.lastCommand = steps.map(s => s.v); return tool('ext_via_nats_command', { inst, id: crypto.randomUUID(), steps }); };
   await command([{ v: 'version' }, { v: 'whoami' }]);
   report.checks.push('mcp-version-and-whoami');
   await page.goto(url);
   const tab = { url: url + '*' };
-  await command([{ v: 'fill', tab, sel: '#name', literal: 'Remote Mesh' }, { v: 'assert', tab, sel: '#name', eq: 'Remote Mesh' }, { v: 'click', tab, sel: '#action' }, { v: 'assert', tab, sel: '#result', eq: 'Tıklama başarılı' }]);
-  assert.equal(await page.locator('#name').inputValue(), 'Remote Mesh');
+  await command([{ v: 'fill', tab, sel: '#name', literal: 'ExtViaNats' }, { v: 'assert', tab, sel: '#name', eq: 'ExtViaNats' }, { v: 'click', tab, sel: '#action' }, { v: 'assert', tab, sel: '#result', eq: 'Tıklama başarılı' }]);
+  assert.equal(await page.locator('#name').inputValue(), 'ExtViaNats');
   assert.equal(await page.locator('#result').textContent(), 'Tıklama başarılı');
   report.checks.push('real-dom-fill-assert-click');
   const moved = await command([{ v: 'relay', from: { tab, sel: '#source' }, to: { tab, sel: '#dest' } }]);
   assert.equal(await page.locator('#dest').inputValue(), 'fixture-private-value');
   assert.equal(JSON.stringify(moved).includes('fixture-private-value'), false);
   report.checks.push('browser-only-value-relay');
-  await command([{ v: 'inject', tab, kind: 'button', id: 'mesh-proof', text: 'Mesh çalışıyor', anchor: 'h1' }]);
-  assert.equal(await page.locator('#mesh-proof').textContent(), 'Mesh çalışıyor');
+  await command([{ v: 'inject', tab, kind: 'button', id: 'evn-proof', text: 'ExtViaNats çalışıyor', anchor: 'h1' }]);
+  assert.equal(await page.locator('#evn-proof').textContent(), 'ExtViaNats çalışıyor');
   report.checks.push('injected-button');
   // Enable the real Chrome userScripts permission through the extension details UI.
   const details = await context.newPage();
@@ -114,37 +114,79 @@ try {
     if (/user.?scripts|kullanıcı.*(?:komut|script)/i.test(label) && !await toggle.evaluate(t => !!t.checked)) await toggle.click();
   }
   await details.close();
-  // Chrome exposes newly granted userScripts access to fresh extension contexts.
-  const restarted = context.waitForEvent('serviceworker', { timeout: 15000 });
-  await command([{ v: 'reload' }]);
-  await restarted;
-  await until(async () => { try { return (await control.request(inst, 'info', {}, 1000)).inst === inst; } catch { return false; } });
+  // Granting userScripts already restarts the extension, so no explicit reload is
+  // needed — and here it is harmful: chrome.runtime.reload() on a CDP-installed
+  // unpacked extension leaves it disabled (options.html then fails with
+  // ERR_BLOCKED_BY_CLIENT), because that install is not persisted in the profile.
+  // One successful info can still be answered by a worker that is about to die,
+  // and a command published in that gap is lost: NATS Core has no offline queue.
+  // Require several consecutive answers, spaced out, before issuing more commands.
+  let stable = 0;
+  const gateStart = Date.now();
+  const stableEnd = gateStart + 60000;
+  report.reloadTrace = [];
+  while (Date.now() < stableEnd && stable < 3) {
+    const at = Date.now() - gateStart;
+    try {
+      const answered = (await control.request(inst, 'info', {}, 2000)).inst === inst;
+      stable = answered ? stable + 1 : 0;
+      report.reloadTrace.push({ at, ok: answered, stable });
+    } catch (e) {
+      stable = 0;
+      report.reloadTrace.push({ at, ok: false, error: e.message });
+    }
+    await new Promise(r => setTimeout(r, 2000));
+  }
+  if (stable < 3) {
+    // Ask the browser itself what happened to the extension, instead of guessing
+    // from the missing NATS answers: still listed? enabled? what does its own
+    // settings page report? An unload and an idle worker look identical on NATS.
+    const probe = await context.newPage();
+    await probe.goto('chrome://extensions/');
+    report.extensionsAfterReload = await probe.evaluate(() => {
+      const list = document.querySelector('extensions-manager')?.shadowRoot?.querySelector('extensions-item-list');
+      return Array.from(list?.shadowRoot?.querySelectorAll('extensions-item') || []).map(it => ({
+        id: it.id,
+        name: it.shadowRoot?.querySelector('#name')?.textContent?.trim() || null,
+        enabled: it.shadowRoot?.querySelector('#enableToggle')?.getAttribute('aria-pressed') ?? null,
+        disableReasons: it.shadowRoot?.querySelector('#disable-reasons')?.textContent?.trim() || null,
+      }));
+    }).catch(e => ({ error: e.message }));
+    report.optionsAfterReload = await probe.goto(`chrome-extension://${extensionId}/options.html`)
+      .then(async () => {
+        await probe.locator('#status').waitFor({ timeout: 8000 });
+        return { state: await probe.locator('#status').getAttribute('data-state'), text: (await probe.locator('#status').textContent()).trim() };
+      })
+      .catch(e => ({ error: e.message }));
+    await probe.close();
+    throw new Error('extension did not stay connected after reload');
+  }
   const query = await command([{ v: 'query', tab, sel: 'h1' }]);
   assert.equal(query.receipts[0].count, 1);
   // Resolve the exact fixture tab through the extension executor instead of CDP IDs.
   const activated = await command([{ v: 'activate', tab }]);
   const tabId = activated.receipts[0].tabId;
-  await tool('remote_mesh_script', { inst, id: crypto.randomUUID(), tab_id: tabId, code: 'document.querySelector("h1").dataset.meshScript="ok";', world: 'USER_SCRIPT' });
-  assert.equal(await page.locator('h1').getAttribute('data-mesh-script'), 'ok');
+  await tool('ext_via_nats_script', { inst, id: crypto.randomUUID(), tab_id: tabId, code: 'document.querySelector("h1").dataset.evnScript="ok";', world: 'USER_SCRIPT' });
+  assert.equal(await page.locator('h1').getAttribute('data-evn-script'), 'ok');
   report.checks.push('real-javascript-user-script');
-  const nodeId = 'live-acceptance';
-  const nodeConfig = path.join(local, 'live-node.json');
-  await writeFile(nodeConfig, JSON.stringify({ nodeId, chromePath: process.env.CHROME_PATH, extensionId, userDataPaths: [profilePath] }));
-  nodeAgent = spawn(process.execPath, [path.join(root, 'scripts/node-agent.mjs'), nodeConfig], { env, stdio: 'ignore', windowsHide: true });
-  await until(async () => (await control.list(100, true)).some(n => n.nodeId === nodeId));
-  const disk = await tool('remote_mesh_disk_profiles', { node_id: nodeId });
-  const profile = disk.profiles.find(p => p.directory === 'Default');
-  assert(profile);
-  const sessionId = crypto.randomUUID();
-  await tool('remote_mesh_launch_profile', { node_id: nodeId, profile_id: profile.profileId, request_id: sessionId, apply: true, url });
-  await until(async () => {
-    const current = await control.request(inst, 'info');
-    return current.launch?.run === sessionId && current.launch?.profileId === profile.profileId && current.runs.includes(sessionId);
+  // Ownership without a launcher: open a marked window, read the marker back
+  // through info, then close only that window. The fixture tab lives in the
+  // operator's own window and must survive the cleanup.
+  const runTag = crypto.randomUUID();
+  const opened = await command([{ v: 'openWindow', url, run: runTag }]).catch(async e => {
+    // Distinguish "worker is gone" from "worker is alive but this verb hung".
+    report.openWindowProbe = await control.request(inst, 'info', {}, 8000)
+      .then(i => ({ alive: true, running: i.running, windows: i.windows, runs: i.runs }))
+      .catch(x => ({ alive: false, error: x.message }));
+    throw e;
   });
-  report.checks.push('native-profile-launch-and-extension-handshake');
-  const closed = await command([{ v: 'close', run: sessionId }]);
+  assert.equal(opened.receipts[0].marked, true);
+  await until(async () => (await control.request(inst, 'info')).runs.includes(runTag));
+  report.checks.push('owned-window-marker');
+  const closed = await command([{ v: 'close', run: runTag }]);
   assert.equal(closed.receipts[0].closed.length, 1);
-  assert.equal(await page.locator('#name').inputValue(), 'Remote Mesh');
+  assert.equal(closed.receipts[0].leftRunning.length, 0);
+  assert.equal(await page.locator('#name').inputValue(), 'ExtViaNats');
   report.checks.push('owned-window-cleanup-preserves-fixture');
   await page.screenshot({ path: path.join(local, 'chrome-live-proof.png') });
   report.ok = true;
@@ -155,7 +197,6 @@ try {
 } finally {
   await writeFile(path.join(local, 'chrome-live-report.json'), JSON.stringify(report, null, 2));
   console.log(JSON.stringify(report, null, 2));
-  await stopChild(nodeAgent);
   await mcp?.close(); await transport?.close();
   await context?.close(); await control.close(); await stopChild(broker);
   await new Promise(resolve => fixture.close(resolve));

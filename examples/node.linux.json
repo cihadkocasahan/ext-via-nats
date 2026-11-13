@@ -1,7 +1,0 @@
-{
-  "nodeId": "linux-workstation",
-  "label": "Linux Chrome",
-  "chromePath": "/usr/bin/google-chrome",
-  "extensionId": "ncfgllpgnoapgbomonfhbmhlcffmmnba",
-  "userDataPaths": ["/home/YOUR_USER/.config/google-chrome"]
-}

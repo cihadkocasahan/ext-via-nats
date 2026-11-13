@@ -1,5 +1,5 @@
 {
-  "name": "remote-mesh-extension",
+  "name": "ext-via-nats",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -13,7 +13,6 @@
     "mcp": "node scripts/mcp.mjs",
     "nats:local": "node scripts/nats-local.mjs start",
     "nats:stop": "node scripts/nats-local.mjs stop",
-    "node-agent": "node scripts/node-agent.mjs",
     "test:chrome": "node scripts/test-chrome.mjs"
   },
   "dependencies": {

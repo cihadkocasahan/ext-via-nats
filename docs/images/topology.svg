@@ -1,0 +1,70 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="460" viewBox="0 0 960 460" font-family="Segoe UI, Arial, sans-serif">
+  <rect width="960" height="460" fill="#f8fafc"/>
+  <text x="480" y="36" text-anchor="middle" font-size="22" font-weight="700" fill="#0f172a">ExtViaNats — browser control over NATS</text>
+
+  <!-- Agent machine -->
+  <rect x="24" y="70" width="270" height="320" rx="12" fill="#eff6ff" stroke="#3b82f6" stroke-width="2"/>
+  <text x="159" y="98" text-anchor="middle" font-size="16" font-weight="700" fill="#1d4ed8">AGENT MACHINE</text>
+  <rect x="54" y="120" width="210" height="64" rx="8" fill="#ffffff" stroke="#3b82f6" stroke-width="1.5"/>
+  <text x="159" y="146" text-anchor="middle" font-size="15" font-weight="600" fill="#0f172a">MCP-capable client</text>
+  <text x="159" y="166" text-anchor="middle" font-size="12" fill="#475569">any stdio MCP client</text>
+  <line x1="159" y1="184" x2="159" y2="230" stroke="#3b82f6" stroke-width="2" marker-end="url(#arrowBlue)"/>
+  <text x="170" y="212" font-size="12" fill="#1d4ed8">stdio (JSON-RPC)</text>
+  <rect x="54" y="232" width="210" height="64" rx="8" fill="#ffffff" stroke="#3b82f6" stroke-width="1.5"/>
+  <text x="159" y="258" text-anchor="middle" font-size="15" font-weight="600" fill="#0f172a">scripts/mcp.mjs</text>
+  <text x="159" y="278" text-anchor="middle" font-size="12" fill="#475569">MCP server · CLI same contract</text>
+  <text x="159" y="330" text-anchor="middle" font-size="12" fill="#475569">dials out to the broker</text>
+  <text x="159" y="350" text-anchor="middle" font-size="12" fill="#475569">env: URL + PREFIX + auth</text>
+
+  <!-- Broker -->
+  <rect x="360" y="120" width="240" height="220" rx="12" fill="#f5f3ff" stroke="#8b5cf6" stroke-width="2"/>
+  <text x="480" y="150" text-anchor="middle" font-size="16" font-weight="700" fill="#6d28d9">NATS BROKER</text>
+  <text x="480" y="176" text-anchor="middle" font-size="13" fill="#0f172a">local ws:// · cloud wss://</text>
+  <text x="480" y="196" text-anchor="middle" font-size="12" fill="#475569">subject ACL</text>
+  <text x="480" y="216" text-anchor="middle" font-size="12" fill="#475569">token / user+pass / .creds</text>
+  <text x="480" y="248" text-anchor="middle" font-size="13" font-weight="600" fill="#6d28d9">prefix: extvianats.browser</text>
+  <text x="480" y="278" text-anchor="middle" font-size="12" fill="#475569">request / reply</text>
+  <text x="480" y="298" text-anchor="middle" font-size="12" fill="#475569">one inbox per request</text>
+
+  <!-- Browser machine -->
+  <rect x="666" y="70" width="270" height="320" rx="12" fill="#f0fdf4" stroke="#22c55e" stroke-width="2"/>
+  <text x="801" y="98" text-anchor="middle" font-size="16" font-weight="700" fill="#15803d">BROWSER MACHINE</text>
+  <rect x="696" y="110" width="210" height="56" rx="8" fill="#ffffff" stroke="#22c55e" stroke-width="1.5"/>
+  <text x="801" y="133" text-anchor="middle" font-size="15" font-weight="600" fill="#0f172a">Chrome MV3 extension</text>
+  <text x="801" y="152" text-anchor="middle" font-size="12" fill="#475569">service worker · outbound only</text>
+  <line x1="801" y1="166" x2="801" y2="196" stroke="#22c55e" stroke-width="2" marker-end="url(#arrowGreen)"/>
+  <rect x="696" y="198" width="210" height="56" rx="8" fill="#ffffff" stroke="#22c55e" stroke-width="1.5"/>
+  <text x="801" y="221" text-anchor="middle" font-size="15" font-weight="600" fill="#0f172a">content script</text>
+  <text x="801" y="240" text-anchor="middle" font-size="12" fill="#475569">every frame · explicit frameId</text>
+  <line x1="801" y1="254" x2="801" y2="284" stroke="#22c55e" stroke-width="2" marker-end="url(#arrowGreen)"/>
+  <rect x="696" y="286" width="210" height="56" rx="8" fill="#ffffff" stroke="#22c55e" stroke-width="1.5"/>
+  <text x="801" y="309" text-anchor="middle" font-size="15" font-weight="600" fill="#0f172a">tabs / DOM / JS</text>
+  <text x="801" y="328" text-anchor="middle" font-size="12" fill="#475569">real profile · real sessions</text>
+  <text x="801" y="368" text-anchor="middle" font-size="12" fill="#475569">no inbound port · no debug port</text>
+
+  <!-- Controller <-> broker -->
+  <line x1="298" y1="200" x2="356" y2="200" stroke="#8b5cf6" stroke-width="2.5" marker-end="url(#arrowPurple)"/>
+  <text x="327" y="190" text-anchor="middle" font-size="11" fill="#6d28d9">request</text>
+  <line x1="356" y1="260" x2="298" y2="260" stroke="#8b5cf6" stroke-width="2.5" marker-end="url(#arrowPurple)"/>
+  <text x="327" y="280" text-anchor="middle" font-size="11" fill="#6d28d9">reply</text>
+
+  <!-- Broker <-> browser -->
+  <line x1="604" y1="200" x2="662" y2="200" stroke="#8b5cf6" stroke-width="2.5" marker-end="url(#arrowPurple)"/>
+  <text x="633" y="190" text-anchor="middle" font-size="11" fill="#6d28d9">cmd</text>
+  <line x1="662" y1="260" x2="604" y2="260" stroke="#8b5cf6" stroke-width="2.5" marker-end="url(#arrowPurple)"/>
+  <text x="633" y="280" text-anchor="middle" font-size="11" fill="#6d28d9">receipts</text>
+
+  <text x="480" y="430" text-anchor="middle" font-size="13" fill="#475569">Both ends dial out. The browser machine opens no listening port; authorisation is the broker's subject ACL.</text>
+
+  <defs>
+    <marker id="arrowBlue" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L9,3 L0,6 Z" fill="#3b82f6"/>
+    </marker>
+    <marker id="arrowGreen" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L9,3 L0,6 Z" fill="#22c55e"/>
+    </marker>
+    <marker id="arrowPurple" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L9,3 L0,6 Z" fill="#8b5cf6"/>
+    </marker>
+  </defs>
+</svg>

@@ -1,21 +1,75 @@
 <!doctype html>
-<html lang="tr"><meta charset="utf-8"><title>Remote Mesh</title>
+<html lang="en"><meta charset="utf-8"><title>ExtViaNats</title>
 <link rel="stylesheet" href="options.css">
-<main><p class="eyebrow">REMOTE MESH / NATS</p><h1>Tarayıcını bağla</h1>
-<p>Yerel ağdaki veya buluttaki NATS sunucusuna bu profilden bağlan.</p>
-<div class="status"><span id="status">Durum okunuyor…</span><code id="inst"></code></div>
+<main>
+<header>
+  <p class="eyebrow">EXTVIANATS · CHROME OVER NATS</p>
+  <div class="lang" role="group" aria-label="Language / Dil">
+    <button type="button" data-lang="en" aria-pressed="true">English</button>
+    <button type="button" data-lang="tr" aria-pressed="false">Türkçe</button>
+  </div>
+</header>
+<h1 data-i18n="title">Connect this browser</h1>
+<p data-i18n="lede">This Chrome profile joins a NATS subject and waits for commands from an MCP-capable agent. Nothing is polled, no debug port is opened.</p>
+
+<div class="status">
+  <span id="status" data-state="unknown" data-i18n="statusUnknown">Reading state…</span>
+  <code id="inst" data-inst=""></code>
+</div>
+
+<section>
+  <h2 data-i18n="choose">1 · Where does your NATS run?</h2>
+  <div class="cards">
+    <button type="button" class="card" data-preset="local" aria-pressed="true">
+      <strong data-i18n="localTitle">Local or your own server</strong>
+      <span data-i18n="localBody">ws:// on your machine or LAN. Free, no account.</span>
+    </button>
+    <button type="button" class="card" data-preset="cloud" aria-pressed="false">
+      <strong data-i18n="cloudTitle">NATS Cloud</strong>
+      <span data-i18n="cloudBody">wss:// with a .creds file. Reaches browsers behind NAT.</span>
+    </button>
+  </div>
+</section>
+
+<section id="local-help">
+  <h3 data-i18n="localStepsTitle">Start a local broker</h3>
+  <pre><code>npm run nats:local</code></pre>
+  <p data-i18n="localStepsBody">That starts NATS with WebSocket on 127.0.0.1:8222. Already running one, or have a server on your LAN? Skip this and type its address below.</p>
+</section>
+
+<section id="cloud-help" hidden>
+  <h3 data-i18n="cloudStepsTitle">Get your .creds file</h3>
+  <ol>
+    <li data-i18n="cloudStep1">Sign in to Synadia Cloud and create an Account.</li>
+    <li data-i18n="cloudStep2">Inside that account create a User.</li>
+    <li data-i18n="cloudStep3">Open “Get Connected” for the user and download the .creds file.</li>
+    <li data-i18n="cloudStep4">Paste the whole file into the .creds field below. The URL field is prefilled with the public cloud WebSocket address; if your account panel shows a different one, use that.</li>
+  </ol>
+  <p class="note" data-i18n="cloudEndpointNote">The quick-start guide shows tls://connect.ngs.global — the native NATS client address, which a browser cannot use. This extension speaks NATS over WebSocket, so the cloud preset fills wss://connect.ngs.global:443. That address answers a real NATS handshake; your .creds still authenticates you. Neither the TCP (4222) nor the monitoring (8222) port speaks WebSocket.</p>
+  <p class="note" data-i18n="gatewayNote">The HTTP Gateway is a different door: REST over HTTPS with an Authorization: Bearer API token. This extension does not use it — a browser cannot hold a long-lived request/reply subscription over REST. Use the .creds WebSocket path above.</p>
+  <p class="hint"><a href="https://docs.synadia.com/cloud/user-guides/quick-start" target="_blank" rel="noreferrer" data-i18n="linkQuickStart">Quick start (account, user, .creds)</a> · <a href="https://docs.synadia.com/cloud/http-gateway" target="_blank" rel="noreferrer" data-i18n="linkGateway">HTTP Gateway (not used here)</a></p>
+</section>
+
 <form id="settings">
-<label>Profil etiketi<input name="label" placeholder="İş bilgisayarı · Chrome 1"></label>
-<label>NATS WebSocket adresi<input name="url" required placeholder="ws://127.0.0.1:8222"></label>
-<p class="hint">Yerel: ws://SUNUCU:8222 · Bulut: wss://SUNUCU:PORT. TCP ve monitoring portları WebSocket değildir.</p>
-<label>Konu öneki<input name="prefix" required value="mesh.browser"></label>
-<fieldset><legend>Kimlik doğrulama (tek yöntem seç)</legend>
-<label>Token<input name="token" type="password" autocomplete="off"></label>
-<div class="row"><label>Kullanıcı<input name="user" autocomplete="off"></label><label>Parola<input name="pass" type="password" autocomplete="off"></label></div>
-<label>NGS / NATS .creds içeriği<textarea name="creds" rows="3" spellcheck="false" autocomplete="off"></textarea></label>
-<p class="hint">Kimlik bilgileri yalnızca bu profilin yerel eklenti deposunda tutulur; Chrome Sync'e gönderilmez. Bu depo bir işletim sistemi parola kasası değildir.</p>
-</fieldset>
-<label class="check"><input type="checkbox" name="enabled"> Uzaktan bağlantıyı etkinleştir</label>
-<button type="submit">Kaydet ve bağlan</button><span id="feedback" role="status"></span>
-</form><p class="hint">Komutlar seçilen NATS hesabının konu izinleriyle yetkilendirilir. Her profil ayrı kimlik alır. Çalışan komutu durdurma isteği adım sınırında uygulanır.</p>
+  <h2 data-i18n="settingsTitle">2 · Connection</h2>
+  <label><span data-i18n="label">Profile label</span><input name="label" data-i18n-placeholder="labelPlaceholder" placeholder="Work laptop · Chrome 1"></label>
+  <label><span data-i18n="url">NATS WebSocket address</span><input name="url" required placeholder="ws://127.0.0.1:8222"></label>
+  <p class="hint" data-i18n="urlHint">Local: ws://HOST:8222 · Cloud: wss://HOST:PORT. Credentials never go inside the URL.</p>
+  <label><span data-i18n="prefix">Subject prefix</span><input name="prefix" required value="extvianats.browser"></label>
+  <p class="hint" data-i18n="prefixHint">Every subject this profile uses starts with it. Keep it identical in the MCP server config.</p>
+  <fieldset>
+    <legend data-i18n="auth">Authentication — pick one</legend>
+    <label><span data-i18n="token">Token</span><input name="token" type="password" autocomplete="off"></label>
+    <div class="row">
+      <label><span data-i18n="user">User</span><input name="user" autocomplete="off"></label>
+      <label><span data-i18n="pass">Password</span><input name="pass" type="password" autocomplete="off"></label>
+    </div>
+    <label><span data-i18n="creds">NATS .creds contents</span><textarea name="creds" rows="4" spellcheck="false" autocomplete="off"></textarea></label>
+    <p class="hint" data-i18n="secretHint">Credentials stay in this profile's local extension storage. They are not sent to Chrome Sync and never travel in a NATS message. This storage is not an OS password vault: anyone with this profile can read it.</p>
+  </fieldset>
+  <label class="check"><input type="checkbox" name="enabled"><span data-i18n="enabled">Enable the remote connection</span></label>
+  <button type="submit" id="save" data-i18n="save">Save and connect</button>
+  <span id="feedback" role="status"></span>
+</form>
+<p class="hint" data-i18n="footer">Commands are authorised by the subject permissions of the NATS account you connect with. Each profile gets its own identity; an email address is not one. An abort request takes effect at the next step boundary.</p>
 </main><script type="module" src="options.js"></script></html>

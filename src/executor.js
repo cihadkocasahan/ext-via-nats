@@ -1,11 +1,10 @@
-// background.js — Agent Relay router (MV3 service worker).
-// Long-polls the local control server (relayd) for commands, executes them
-// across tabs, and POSTs back NON-SECRET receipts. Raw values (_v) travel
-// only in this worker's memory between tabs; they are never serialized out.
-// Each step also streams a redacted HUD line to the affected tab(s).
+// executor.js — browser verb executor for the MV3 service worker.
+// Commands arrive over NATS request/reply (see background.js), run across tabs
+// and frames, and answer with NON-SECRET receipts. Raw values (_v) travel only
+// in this worker's memory between tabs; they are never serialized out.
+// Each step also streams a redacted HUD line to the affected tab.
 
-// Browser verbs adapted from chrome-profile-manager/extension (organized excluded).
-const BUILD = 'remote-mesh-0.1.0';
+const BUILD = 'ext-via-nats-0.1.0';
 let transport = { announce() {} };
 
 // Provenance marker. `inst` identifies a PROFILE, not a window, so it cannot
@@ -38,17 +37,17 @@ let hubTabId = null;
 // page Chrome opens by default and it is addressable by url matcher.
 const NTP = 'chrome://newtab/';
 
-// This worker's identity. relayd dispatches on it, so a command can no longer
-// land in "whichever profile happened to poll first" — the silent multi-profile
-// lottery. It is deliberately NOT the profile name (an extension cannot read
-// that); it is a stable handle for exactly one running profile.
+// This worker's identity. The controller dispatches on it, so a command can no
+// longer land in "whichever profile happened to answer first" — the silent
+// multi-profile lottery. It is deliberately NOT the profile name (an extension
+// cannot read that); it is a stable handle for exactly one running profile.
 let inst = null;
 const instReady = (async () => {
   try {
-    const got = await chrome.storage.local.get('arInst');
-    if (got && typeof got.arInst === 'string' && got.arInst) { inst = got.arInst; return; }
+    const got = await chrome.storage.local.get('extViaNatsInst');
+    if (got && typeof got.extViaNatsInst === 'string' && got.extViaNatsInst) { inst = got.extViaNatsInst; return; }
     inst = crypto.randomUUID();
-    await chrome.storage.local.set({ arInst: inst });
+    await chrome.storage.local.set({ extViaNatsInst: inst });
   } catch (_) { inst = 'anon-' + Math.random().toString(36).slice(2, 10); }
 })();
 
@@ -62,7 +61,9 @@ let abortFlag = false;
 const FAIL_CODES = [
   [/^no tab with id/, 'no_tab_id'],
   [/^no tab for/, 'no_tab'],
-  [/no element/, 'element_not_found'],
+  [/no element|not found$/, 'element_not_found'],
+  [/Cannot access contents of|The extensions gallery cannot be scripted|cannot be scripted/, 'page_not_scriptable'],
+  [/No frame with id|frame was removed/, 'no_frame'],
   // a playbook that names a tab by an invalid match pattern (an IP host with a
   // `*://` scheme, a missing path) fails in Chrome's own words; that is an
   // authoring bug, not a page state, so it needs its own code to branch on
@@ -106,42 +107,41 @@ async function inventory() {
   return { wins, tabs, runs, ours };
 }
 
-// The signed-in account is the only profile label an extension is allowed to
-// read about itself. It is a name, not a credential: relayd already knows the
-// profile DIRECTORY from the command line it launched, this joins them.
-async function account() {
-  if (!chrome.identity || !chrome.identity.getProfileUserInfo) {
-    return { acct: null, acctErr: 'no identity api' };
-  }
-  try {
-    const u = await chrome.identity.getProfileUserInfo({ accountStatus: 'ANY' });
-    return { acct: (u && u.email) || null, acctErr: (u && u.email) ? null : 'empty profile' };
-  } catch (e) {
-    return { acct: null, acctErr: String((e && e.message) || e) };
-  }
+// Receipts carry a page ADDRESS, never its query string: a signed media URL,
+// an OAuth `code` or a reset token lives in the query, and a receipt is what an
+// MCP client logs. Origin + path is enough to identify a page or a frame.
+function safeUrl(u) {
+  try { const x = new URL(String(u)); return x.origin + x.pathname; } catch (_) { return null; }
 }
 
-// Launch provenance: what started this profile, if it was us. harness.js writes
-// it (as `arLaunch`) when this extension's OWN marker page is opened with `at`
-// in the URL — a URL only relayd builds — so a record that is present is proof
-// the relay launched this profile, not the operator. Storage, not memory: it
-// outlives a frozen worker and a browser restart, which is the point.
-async function launchInfo() {
-  try {
-    const got = await chrome.storage.local.get('arLaunch');
-    return (got && got.arLaunch) || null;
-  } catch (_) { return null; }
+// Receipt budget for an inline image. NATS Core has no offline queue and the
+// broker silently drops an oversized publish, so a screenshot is downscaled in
+// the worker and refused above this size instead of vanishing into a timeout.
+const MAX_IMAGE_BYTES = 700 * 1024;
+
+async function shrinkImage(dataUrl, maxWidth, format, quality) {
+  const blob = await (await fetch(dataUrl)).blob();
+  const bmp = await createImageBitmap(blob);
+  const scale = Math.min(1, maxWidth / bmp.width);
+  const w = Math.max(1, Math.round(bmp.width * scale));
+  const h = Math.max(1, Math.round(bmp.height * scale));
+  const canvas = new OffscreenCanvas(w, h);
+  canvas.getContext('2d').drawImage(bmp, 0, 0, w, h);
+  bmp.close();
+  const out = await canvas.convertToBlob({ type: format === 'png' ? 'image/png' : 'image/jpeg', quality: quality / 100 });
+  const buf = new Uint8Array(await out.arrayBuffer());
+  let bin = '';
+  for (let k = 0; k < buf.length; k += 0x8000) bin += String.fromCharCode.apply(null, buf.subarray(k, k + 0x8000));
+  return `data:${out.type};base64,${btoa(bin)}`;
 }
 
 async function sessionInfo() {
   const m = chrome.runtime.getManifest();
   const inv = await inventory();
-  const who = await account();
-  const launch = await launchInfo();
   return {
-    inst, ver: m.version, build: BUILD, acct: who.acct, acctErr: who.acctErr, tabs: inv.tabs,
+    inst, ver: m.version, build: BUILD, tabs: inv.tabs,
     windows: inv.wins.map(w => ({ id: w.id, type: w.type, state: w.state, focused: !!w.focused, tabs: (w.tabs || []).length })),
-    ours: inv.ours, runs: Object.keys(inv.runs), launch,
+    ours: inv.ours, runs: Object.keys(inv.runs),
   };
 }
 
@@ -152,11 +152,7 @@ async function sessionInfo() {
 // window that is already closed. Signature-based: same → skip, changed → send.
 let helloSig = '';
 function helloChanged(info) {
-  // `launch` is in the signature so a provenance record written after the
-  // window was already announced still reaches relayd (the record is the only
-  // field that can change while nothing else does).
-  const sig = JSON.stringify([info.tabs, info.windows, info.ours, info.runs,
-    info.launch ? [info.launch.run, info.launch.task, info.launch.at] : null]);
+  const sig = JSON.stringify([info.tabs, info.windows, info.ours, info.runs]);
   if (sig === helloSig) return false;
   helloSig = sig;
   return true;
@@ -229,12 +225,18 @@ function waitStatus(tabId, status, budget) {
   });
 }
 
-async function send(tab, msg) {
+// Frame addressing is explicit. Without a frameId Chrome delivers a tab message
+// to EVERY frame and answers with whichever replies first, so a selector that
+// exists in two frames is a lottery. Default is the top frame (0); `frameId`
+// names one frame, including a cross-origin one — content.js is injected into
+// all frames, so an iframe is addressable without a debugger attachment.
+async function send(tab, msg, frameId = 0) {
+  const opts = { frameId };
   try {
-    return await chrome.tabs.sendMessage(tab.id, msg);
+    return await chrome.tabs.sendMessage(tab.id, msg, opts);
   } catch (e) {
-    await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['content.js'] });
-    return chrome.tabs.sendMessage(tab.id, msg);
+    await chrome.scripting.executeScript({ target: { tabId: tab.id, frameIds: [frameId] }, files: ['content.js'] });
+    return chrome.tabs.sendMessage(tab.id, msg, opts);
   }
 }
 
@@ -244,26 +246,53 @@ async function hud(tab, line) {
   try { await send(tab, { op: 'hud', line }); } catch (_) {}
 }
 
-// One-shot secret fetch. The slot is bound to this command id and this
-// instance, so a replayed or misplaced `put` gets a code and no value; the
-// value is handed straight to the tab and cleared here, never stored, never
-// returned in a receipt.
-async function fetchSlot() {
-  return { ok: false, code: 'local_secret_store_required',
-    error: 'Local relayd secret slots are unavailable in direct NATS mode; use browser-to-browser relay/move.' };
-}
-
 function strip(res, v, i) {
   const r = { i, v, ok: !!(res && res.ok) };
   if (res && res.error) r.error = res.error;
   if (res && typeof res.len === 'number') r.len = res.len;
-
+  if (res && res.code) r.code = res.code;
   return r;
 }
+
+// Verbs whose whole job is one content-script op. The step's own fields are
+// forwarded by name, so the wire contract and the DOM contract cannot drift.
+const CONTENT_OPS = {
+  hover: ['sel'],
+  dblclick: ['sel'],
+  rightClick: ['sel'],
+  highlight: ['sel', 'color', 'ms'],
+  mouseDrag: ['sel', 'dx', 'dy', 'moves'],
+  select: ['sel', 'value', 'label', 'index'],
+  scroll: ['sel', 'align', 'x', 'y', 'byX', 'byY'],
+  getText: ['sel', 'max'],
+  getHTML: ['sel', 'outer', 'max'],
+  media: ['sel', 'action', 'value'],
+  uploadFile: ['sel', 'name', 'mime', 'text', 'url', 'dataUrl'],
+};
+// Result fields a receipt may carry back. Page text/markup is opt-in egress
+// (the caller asked for it); everything else is shape, count or state.
+const OP_FIELDS = {
+  hover: ['hit'], dblclick: ['hit'], rightClick: ['hit'], highlight: ['hit'],
+  mouseDrag: ['from', 'to'], select: ['index', 'count'], scroll: ['mode', 'x', 'y', 'maxY', 'box'],
+  getText: ['text', 'truncated'], getHTML: ['html', 'truncated'],
+  media: ['action', 'paused', 'muted', 'volume', 'rate', 'currentTime', 'duration', 'ended', 'readyState', 'src'],
+  uploadFile: ['name', 'bytes', 'via', 'setFiles', 'dropped'],
+};
 
 async function runStep(step, i, id) {
   const run = (tab, sel) => tab && hud(tab, { id, i, v: step.v, sel, phase: 'run' });
   const done = (tab, sel, r) => tab && hud(tab, Object.assign({ id, i, v: step.v, sel }, r));
+  const fid = Number.isInteger(step.frameId) ? step.frameId : 0;
+  const send$ = (tab, msg, f = fid) => send(tab, msg, f);
+  if (CONTENT_OPS[step.v]) {
+    const tab = await tabFor(step.tab); run(tab, step.sel);
+    const msg = { op: step.v };
+    for (const k of CONTENT_OPS[step.v]) if (step[k] !== undefined) msg[k] = step[k];
+    const res = await send$(tab, msg);
+    const r = strip(res, step.v, i);
+    for (const k of OP_FIELDS[step.v] || []) if (res && res[k] !== undefined) r[k] = res[k];
+    done(tab, step.sel, r); return r;
+  }
   switch (step.v) {
     case 'script': {
       if (!chrome.userScripts?.execute) return { i, v: 'script', ok: false, code: 'user_scripts_unavailable', error: 'Chrome 135+ ve eklenti ayrıntılarında kullanıcı script izni gerekir.' };
@@ -387,14 +416,14 @@ async function runStep(step, i, id) {
     }
     case 'waitFor': {
       const tab = await tabFor(step.tab); run(tab, step.sel);
-      const res = await send(tab, { op: 'waitFor', sel: step.sel, timeout: step.timeout, grow: !!step.grow, quiet: step.quiet });
+      const res = await send$(tab, { op: 'waitFor', sel: step.sel, timeout: step.timeout, grow: !!step.grow, quiet: step.quiet });
       const r = strip(res, 'waitFor', i);
       if (res && typeof res.count === 'number') r.count = res.count;
       done(tab, step.sel, r); return r;
     }
     case 'click': {
       const tab = await tabFor(step.tab); run(tab, step.sel);
-      const res = await send(tab, { op: 'click', sel: step.sel });
+      const res = await send$(tab, { op: 'click', sel: step.sel });
       const r = strip(res, 'click', i);
       if (res && res.hit) r.hit = res.hit;
       done(tab, step.sel, r); return r;
@@ -402,10 +431,10 @@ async function runStep(step, i, id) {
     case 'captcha': {
       // The human gate. Detects, warns on screen, and — with wait:true — blocks
       // until the operator solves it, so the run resumes by itself instead of
-      // needing someone to tell the agent "I did it". Budget stays under
-      // relayd's 60s ceiling; a longer challenge needs another captcha step.
+      // needing someone to tell the agent "I did it". Budget stays under the
+      // 60s content-script ceiling; a longer challenge needs another step.
       const tab = await tabFor(step.tab); run(tab, null);
-      const res = await send(tab, { op: 'captcha', wait: !!step.wait, timeout: step.timeout });
+      const res = await send$(tab, { op: 'captcha', wait: !!step.wait, timeout: step.timeout });
       const r = strip(res, 'captcha', i);
       if (res) {
         r.present = !!res.present;
@@ -416,53 +445,21 @@ async function runStep(step, i, id) {
       done(tab, null, r); return r;
     }
     case 'fill': {
-      // `fill` is the literal verb. If a ref reached it, someone wrote the
-      // secret into the command itself — which is the hole `put` exists to
-      // close, so this refuses rather than helpfully resolving it.
+      // `fill` is the literal verb: labels, usernames, search terms. A secret
+      // reference is refused rather than resolved — this build has no secret
+      // store, and a value that must not be read by the agent should be moved
+      // browser-to-browser with relay/move/swap instead of named in a command.
       if (typeof step.secret === 'string' && step.secret) {
-        return { i, v: 'fill', ok: false, code: 'secret_ref_needs_put',
-          error: 'fill takes literals only; name the source on a v:"put" step' };
+        return { i, v: 'fill', ok: false, code: 'secret_ref_unsupported',
+          error: 'fill takes literals only; use relay/move/swap to carry a value between fields' };
       }
       const tab = await tabFor(step.tab); run(tab, step.sel);
-      const res = await send(tab, { op: 'fill', sel: step.sel, literal: step.literal });
+      const res = await send$(tab, { op: 'fill', sel: step.sel, literal: step.literal });
       const r = strip(res, 'fill', i); done(tab, step.sel, r); return r;
-    }
-    case 'put': {
-      // Write a value the agent never saw. relayd turned the step's `secret`
-      // ref into a one-shot slot; we fetch it once, hand it straight to the
-      // tab, and describe the result by LENGTH only — no tail4, because four
-      // characters of a 40-character token is real entropy in a log file, and
-      // no value, because the receipt is what an MCP client reads back.
-      if (step.literal !== undefined) {
-        return { i, v: 'put', ok: false, code: 'literal_needs_fill',
-          error: 'put takes a secret ref (resolved to a slot), not a literal' };
-      }
-      if (!step.slot) {
-        return { i, v: 'put', ok: false, code: 'no_slot',
-          error: 'put step has no slot: relayd did not resolve a secret ref' };
-      }
-      const tab = await tabFor(step.tab); run(tab, step.sel);
-      const got = await fetchSlot(step.slot, id);
-      if (!got.ok) {
-        const r = { i, v: 'put', ok: false, code: got.code, error: got.error };
-        done(tab, step.sel, r); return r;
-      }
-      if (!got._v) {
-        const r = { i, v: 'put', ok: false, code: 'secret_empty',
-          error: 'slot answered an empty value; nothing written' };
-        done(tab, step.sel, r); return r;
-      }
-      const res = await send(tab, { op: 'writeRaw', sel: step.sel, _v: got._v, mask: step.mask === true });
-      const ok = !!(res && res.ok);
-      const r = { i, v: 'put', ok, len: ok ? res.len : undefined, error: res && res.error };
-      // report what the page really ended up with, not what we asked for
-      if (step.mask === true) r.masked = ok ? !!(res && res.masked) : undefined;
-      got._v = undefined;
-      done(tab, step.sel, r); return r;
     }
     case 'assert': {
       const tab = await tabFor(step.tab); run(tab, step.sel);
-      const res = await send(tab, { op: 'assert', sel: step.sel, has: step.has, eq: step.eq, absent: step.absent });
+      const res = await send$(tab, { op: 'assert', sel: step.sel, has: step.has, eq: step.eq, absent: step.absent });
       const r = strip(res, 'assert', i);
       // a value mismatch arrives as ok:false with no prose at all, which mapped
       // to the opaque `failed` code; an agent must be able to tell "wrong text"
@@ -477,7 +474,7 @@ async function runStep(step, i, id) {
       // in round-trips. Page text is opt-in (`text:true`) and withheld for
       // fields, so a discovery step cannot become a value-read.
       const tab = await tabFor(step.tab); run(tab, step.sel);
-      const res = await send(tab, { op: 'query', sel: step.sel, limit: step.limit, text: step.text === true });
+      const res = await send$(tab, { op: 'query', sel: step.sel, limit: step.limit, text: step.text === true });
       const r = strip(res, 'query', i);
       if (res && typeof res.count === 'number') r.count = res.count;
       if (res && typeof res.shown === 'number') r.shown = res.shown;
@@ -486,7 +483,7 @@ async function runStep(step, i, id) {
     }
     case 'clear': { // actively wipe a field (e.g. a relayed secret) so nothing lingers
       const tab = await tabFor(step.tab); run(tab, step.sel);
-      const res = await send(tab, { op: 'clearRaw', sel: step.sel });
+      const res = await send$(tab, { op: 'clearRaw', sel: step.sel });
       const r = { i, v: 'clear', ok: !!(res && res.ok) }; done(tab, step.sel, r); return r;
     }
     case 'setStore': {
@@ -496,22 +493,31 @@ async function runStep(step, i, id) {
       // receipt answers with counts (cleared / left), so a run can prove it
       // wiped something without any value passing through.
       const tab = await tabFor(step.tab); run(tab, step.sel);
-      const res = await send(tab, { op: 'setStore', sel: step.sel, value: step.value, remove: step.remove === true });
+      const res = await send$(tab, { op: 'setStore', sel: step.sel, value: step.value, remove: step.remove === true });
       const r = strip(res, 'setStore', i);
       if (res && typeof res.cleared === 'number') r.cleared = res.cleared;
       if (res && typeof res.left === 'number') r.left = res.left;
       if (!r.ok && res && res.code) r.code = res.code;
       done(tab, step.sel, r); return r;
     }
+    case 'drag': { // two nodes, so it cannot ride the single-selector dispatcher
+      const tab = await tabFor(step.tab);
+      const from = (step.from && step.from.sel) || null, to = (step.to && step.to.sel) || null;
+      run(tab, from);
+      const res = await send$(tab, { op: 'drag', from: { sel: from }, to: { sel: to } });
+      const r = strip(res, 'drag', i);
+      for (const k of ['handled', 'from', 'to']) if (res && res[k] !== undefined) r[k] = res[k];
+      done(tab, from, r); return r;
+    }
     case 'relay': {
       const src = await tabFor(step.from.tab), dst = await tabFor(step.to.tab);
       run(src, step.from.sel); run(dst, step.to.sel);
-      const rd = await send(src, { op: 'readRaw', sel: step.from.sel });
+      const rd = await send$(src, { op: 'readRaw', sel: step.from.sel }, step.from.frameId);
       if (!rd || !rd.ok) { const r = { i, v: 'relay', ok: false, error: (rd && rd.error) || 'read failed' }; done(src, step.from.sel, r); return r; }
       // writing '' over a destination looks like success in a receipt and costs
       // a full re-run to notice, so an empty source is its own failure code
       if (!(rd._v || '').trim()) { const r = { i, v: 'relay', ok: false, error: 'source field empty' }; done(src, step.from.sel, r); return r; }
-      const wr = await send(dst, { op: 'writeRaw', sel: step.to.sel, _v: rd._v });
+      const wr = await send$(dst, { op: 'writeRaw', sel: step.to.sel, _v: rd._v }, step.to.frameId);
       const r = strip(wr, 'relay', i);
       done(src, step.from.sel, { ok: true, len: (rd._v || '').length });
       done(dst, step.to.sel, r);
@@ -520,21 +526,21 @@ async function runStep(step, i, id) {
     case 'swap': {
       const ta = await tabFor(step.a.tab), tb = await tabFor(step.b.tab);
       run(ta, step.a.sel); run(tb, step.b.sel);
-      const ra = await send(ta, { op: 'readRaw', sel: step.a.sel });
-      const rb = await send(tb, { op: 'readRaw', sel: step.b.sel });
-      await send(ta, { op: 'writeRaw', sel: step.a.sel, _v: rb._v });
-      const w2 = await send(tb, { op: 'writeRaw', sel: step.b.sel, _v: ra._v });
+      const ra = await send$(ta, { op: 'readRaw', sel: step.a.sel }, step.a.frameId);
+      const rb = await send$(tb, { op: 'readRaw', sel: step.b.sel }, step.b.frameId);
+      await send$(ta, { op: 'writeRaw', sel: step.a.sel, _v: rb._v }, step.a.frameId);
+      const w2 = await send$(tb, { op: 'writeRaw', sel: step.b.sel, _v: ra._v }, step.b.frameId);
       const r = { i, v: 'swap', ok: !!(ra.ok && rb.ok && w2.ok), len: (w2 && w2.len) || 0 };
       done(ta, step.a.sel, r); done(tb, step.b.sel, r); return r;
     }
     case 'move': {
       const src = await tabFor(step.from.tab), dst = await tabFor(step.to.tab);
       run(src, step.from.sel); run(dst, step.to.sel);
-      const rd = await send(src, { op: 'readRaw', sel: step.from.sel });
+      const rd = await send$(src, { op: 'readRaw', sel: step.from.sel }, step.from.frameId);
       if (!rd || !rd.ok) { const r = { i, v: 'move', ok: false, error: 'read failed' }; done(src, step.from.sel, r); return r; }
       if (!(rd._v || '').trim()) { const r = { i, v: 'move', ok: false, error: 'source field empty' }; done(src, step.from.sel, r); return r; }
-      await send(src, { op: 'clearRaw', sel: step.from.sel });
-      const wr = await send(dst, { op: 'writeRaw', sel: step.to.sel, _v: rd._v });
+      await send$(src, { op: 'clearRaw', sel: step.from.sel }, step.from.frameId);
+      const wr = await send$(dst, { op: 'writeRaw', sel: step.to.sel, _v: rd._v }, step.to.frameId);
       const r = strip(wr, 'move', i);
       done(src, step.from.sel, { ok: true, len: (rd._v || '').length });
       done(dst, step.to.sel, r); return r;
@@ -617,19 +623,116 @@ async function runStep(step, i, id) {
       if (t.windowId != null) await chrome.windows.update(t.windowId, { focused: true });
       // reporting which surface we just took over is what lets an operator notice
       // a stray tab in their own window before it becomes a mystery
-      return { i, v: 'activate', ok: true, tabId: t.id, windowId: t.windowId, url: t.url, title: t.title };
+      return { i, v: 'activate', ok: true, tabId: t.id, windowId: t.windowId, url: safeUrl(t.url), title: t.title };
     }
     case 'key': {
       const tab = await tabFor(step.tab); run(tab, step.sel);
-      const res = await send(tab, { op: 'key', sel: step.sel, key: step.key, code: step.code });
+      const res = await send$(tab, { op: 'key', sel: step.sel, key: step.key, code: step.code });
       const r = strip(res, 'key', i); done(tab, step.sel, r); return r;
     }
     case 'inject': { // add a convenience affordance (button/overlay) into the page. No secret crosses.
       const tab = await tabFor(step.tab); run(tab, step.anchor || step.kind);
-      const res = await send(tab, { op: 'inject', kind: step.kind, id: step.id, html: step.html, text: step.text, anchor: step.anchor, copyFrom: step.copyFrom, css: step.css });
+      const res = await send$(tab, { op: 'inject', kind: step.kind, id: step.id, html: step.html, text: step.text, anchor: step.anchor, copyFrom: step.copyFrom, css: step.css });
       const r = strip(res, 'inject', i);
       r.anchored = !!(res && res.anchored); // false = fell back to the corner overlay, not attached to the page
       done(tab, step.anchor, r); return r;
+    }
+    // ── frame inventory ────────────────────────────────────────────
+    // The answer to "which frame do I address?". A cross-origin iframe is a
+    // separate document with its own frameId; every DOM verb takes that id, so
+    // an embedded player, checkout or consent frame is reachable without
+    // attaching a debugger to the browser.
+    case 'frames': {
+      const tab = await tabFor(step.tab);
+      if (!chrome.webNavigation?.getAllFrames) {
+        return { i, v: 'frames', ok: false, code: 'frames_unavailable', error: 'webNavigation API unavailable' };
+      }
+      const all = await chrome.webNavigation.getAllFrames({ tabId: tab.id });
+      return { i, v: 'frames', ok: true, tabId: tab.id, count: all.length,
+        frames: all.map(f => ({ frameId: f.frameId, parentFrameId: f.parentFrameId,
+          url: safeUrl(f.url), error: f.errorOccurred ? true : undefined })) };
+    }
+
+    // ── pixels ─────────────────────────────────────────────────────
+    case 'screenshot': {
+      const tab = await tabFor(step.tab);
+      // captureVisibleTab only sees the ACTIVE tab of a window, so a background
+      // target must be raised first. That is a screen takeover: refused under
+      // dnd rather than silently performed.
+      let raised = false;
+      if (!tab.active) {
+        if (dndMode) {
+          return { i, v: 'screenshot', ok: false, code: 'dnd_refused',
+            error: 'screenshot needs the tab visible; refused under dnd' };
+        }
+        await chrome.tabs.update(tab.id, { active: true });
+        raised = true;
+      }
+      const format = step.format === 'png' ? 'png' : 'jpeg';
+      const quality = Math.max(10, Math.min(100, Number(step.quality) || 70));
+      const raw = await chrome.tabs.captureVisibleTab(tab.windowId,
+        format === 'png' ? { format: 'png' } : { format: 'jpeg', quality });
+      // A full-resolution PNG of a busy page is several MB; NATS drops payloads
+      // over the broker's max_payload, which would look like a lost reply rather
+      // than a large image. Downscale in the worker and answer with a size.
+      const dataUrl = await shrinkImage(raw, Number(step.maxWidth) || 1280, format, quality);
+      const bytes = Math.round((dataUrl.length - dataUrl.indexOf(',') - 1) * 0.75);
+      if (bytes > MAX_IMAGE_BYTES) {
+        return { i, v: 'screenshot', ok: false, code: 'screenshot_too_large', bytes,
+          error: 'image exceeds the NATS payload budget; lower maxWidth or quality' };
+      }
+      return { i, v: 'screenshot', ok: true, tabId: tab.id, windowId: tab.windowId,
+        format, bytes, raised: raised || undefined, dataUrl };
+    }
+
+    // ── session history ────────────────────────────────────────────
+    case 'history': {
+      const tab = await tabFor(step.tab);
+      const action = step.action || 'back';
+      const go = { back: chrome.tabs.goBack, forward: chrome.tabs.goForward, reload: chrome.tabs.reload }[action];
+      if (!go) return { i, v: 'history', ok: false, code: 'bad_action', error: 'history action must be back, forward or reload' };
+      try { await go(tab.id); }
+      catch (e) { return { i, v: 'history', ok: false, code: 'no_history', error: String((e && e.message) || e) }; }
+      const loaded = await waitStatus(tab.id, 'complete', step.loadTimeout);
+      const r = { i, v: 'history', ok: loaded === 'complete', action, loaded };
+      if (!r.ok) r.error = 'page did not finish loading (' + loaded + ')';
+      return r;
+    }
+
+    // ── cookies (metadata out, never values) ───────────────────────
+    case 'cookies': {
+      if (!chrome.cookies) return { i, v: 'cookies', ok: false, code: 'cookies_unavailable', error: 'cookies API unavailable' };
+      const action = step.action || 'list';
+      // An unfiltered getAll() would enumerate every cookie in the browser, so
+      // a scope is mandatory: an explicit url/domain, or the addressed tab.
+      let url = step.url;
+      if (!url && !step.domain) {
+        const tab = await tabFor(step.tab);
+        url = tab.url;
+      }
+      if (action === 'list') {
+        const q = step.domain ? { domain: step.domain } : { url };
+        if (step.name) q.name = step.name;
+        const all = await chrome.cookies.getAll(q);
+        const limit = Math.min(Math.max(Number(step.limit) || 50, 1), 200);
+        return { i, v: 'cookies', ok: true, count: all.length, shown: Math.min(all.length, limit),
+          cookies: all.slice(0, limit).map(c => ({ name: c.name, domain: c.domain, path: c.path,
+            secure: !!c.secure, httpOnly: !!c.httpOnly, session: !!c.session,
+            sameSite: c.sameSite, expires: c.expirationDate || null })) };
+      }
+      if (!url || !step.name) return { i, v: 'cookies', ok: false, code: 'bad_cookie_target', error: 'cookies set/remove need url and name' };
+      if (action === 'remove') {
+        const gone = await chrome.cookies.remove({ url, name: step.name });
+        return { i, v: 'cookies', ok: !!gone, removed: !!gone, name: step.name };
+      }
+      if (action === 'set') {
+        if (typeof step.value !== 'string') return { i, v: 'cookies', ok: false, code: 'field_empty', error: 'cookies set needs a string value' };
+        const c = await chrome.cookies.set({ url, name: step.name, value: step.value,
+          path: step.path || '/', secure: step.secure === true, httpOnly: step.httpOnly === true,
+          sameSite: step.sameSite || 'lax', ...(Number.isFinite(step.expires) ? { expirationDate: step.expires } : {}) });
+        return { i, v: 'cookies', ok: !!c, name: step.name, len: step.value.length };
+      }
+      return { i, v: 'cookies', ok: false, code: 'bad_action', error: 'cookies action must be list, set or remove' };
     }
     default:
       return { i, v: step.v, ok: false, error: 'unknown verb' };

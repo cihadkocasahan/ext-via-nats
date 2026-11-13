@@ -9276,7 +9276,7 @@ var require_mod3 = __commonJS({
 var import_nats_core = __toESM(require_mod3(), 1);
 
 // src/executor.js
-var BUILD = "remote-mesh-0.1.0";
+var BUILD = "ext-via-nats-0.1.0";
 var transport = { announce() {
 } };
 var HARNESS = chrome.runtime.getURL("harness.html");
@@ -9287,13 +9287,13 @@ var NTP = "chrome://newtab/";
 var inst = null;
 var instReady = (async () => {
   try {
-    const got = await chrome.storage.local.get("arInst");
-    if (got && typeof got.arInst === "string" && got.arInst) {
-      inst = got.arInst;
+    const got = await chrome.storage.local.get("extViaNatsInst");
+    if (got && typeof got.extViaNatsInst === "string" && got.extViaNatsInst) {
+      inst = got.extViaNatsInst;
       return;
     }
     inst = crypto.randomUUID();
-    await chrome.storage.local.set({ arInst: inst });
+    await chrome.storage.local.set({ extViaNatsInst: inst });
   } catch (_) {
     inst = "anon-" + Math.random().toString(36).slice(2, 10);
   }
@@ -9303,7 +9303,9 @@ var abortFlag = false;
 var FAIL_CODES = [
   [/^no tab with id/, "no_tab_id"],
   [/^no tab for/, "no_tab"],
-  [/no element/, "element_not_found"],
+  [/no element|not found$/, "element_not_found"],
+  [/Cannot access contents of|The extensions gallery cannot be scripted|cannot be scripted/, "page_not_scriptable"],
+  [/No frame with id|frame was removed/, "no_frame"],
   // a playbook that names a tab by an invalid match pattern (an IP host with a
   // `*://` scheme, a missing path) fails in Chrome's own words; that is an
   // authoring bug, not a page state, so it needs its own code to branch on
@@ -9347,52 +9349,46 @@ async function inventory() {
   }
   return { wins, tabs, runs, ours };
 }
-async function account() {
-  if (!chrome.identity || !chrome.identity.getProfileUserInfo) {
-    return { acct: null, acctErr: "no identity api" };
-  }
+function safeUrl(u) {
   try {
-    const u = await chrome.identity.getProfileUserInfo({ accountStatus: "ANY" });
-    return { acct: u && u.email || null, acctErr: u && u.email ? null : "empty profile" };
-  } catch (e) {
-    return { acct: null, acctErr: String(e && e.message || e) };
-  }
-}
-async function launchInfo() {
-  try {
-    const got = await chrome.storage.local.get("arLaunch");
-    return got && got.arLaunch || null;
+    const x = new URL(String(u));
+    return x.origin + x.pathname;
   } catch (_) {
     return null;
   }
 }
+var MAX_IMAGE_BYTES = 700 * 1024;
+async function shrinkImage(dataUrl, maxWidth, format, quality) {
+  const blob = await (await fetch(dataUrl)).blob();
+  const bmp = await createImageBitmap(blob);
+  const scale = Math.min(1, maxWidth / bmp.width);
+  const w = Math.max(1, Math.round(bmp.width * scale));
+  const h = Math.max(1, Math.round(bmp.height * scale));
+  const canvas = new OffscreenCanvas(w, h);
+  canvas.getContext("2d").drawImage(bmp, 0, 0, w, h);
+  bmp.close();
+  const out = await canvas.convertToBlob({ type: format === "png" ? "image/png" : "image/jpeg", quality: quality / 100 });
+  const buf = new Uint8Array(await out.arrayBuffer());
+  let bin = "";
+  for (let k = 0; k < buf.length; k += 32768) bin += String.fromCharCode.apply(null, buf.subarray(k, k + 32768));
+  return `data:${out.type};base64,${btoa(bin)}`;
+}
 async function sessionInfo() {
   const m = chrome.runtime.getManifest();
   const inv = await inventory();
-  const who = await account();
-  const launch = await launchInfo();
   return {
     inst,
     ver: m.version,
     build: BUILD,
-    acct: who.acct,
-    acctErr: who.acctErr,
     tabs: inv.tabs,
     windows: inv.wins.map((w) => ({ id: w.id, type: w.type, state: w.state, focused: !!w.focused, tabs: (w.tabs || []).length })),
     ours: inv.ours,
-    runs: Object.keys(inv.runs),
-    launch
+    runs: Object.keys(inv.runs)
   };
 }
 var helloSig = "";
 function helloChanged(info) {
-  const sig = JSON.stringify([
-    info.tabs,
-    info.windows,
-    info.ours,
-    info.runs,
-    info.launch ? [info.launch.run, info.launch.task, info.launch.at] : null
-  ]);
+  const sig = JSON.stringify([info.tabs, info.windows, info.ours, info.runs]);
   if (sig === helloSig) return false;
   helloSig = sig;
   return true;
@@ -9462,12 +9458,13 @@ function waitStatus(tabId, status2, budget) {
     }).catch(() => finish("gone"));
   });
 }
-async function send(tab, msg) {
+async function send(tab, msg, frameId = 0) {
+  const opts = { frameId };
   try {
-    return await chrome.tabs.sendMessage(tab.id, msg);
+    return await chrome.tabs.sendMessage(tab.id, msg, opts);
   } catch (e) {
-    await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["content.js"] });
-    return chrome.tabs.sendMessage(tab.id, msg);
+    await chrome.scripting.executeScript({ target: { tabId: tab.id, frameIds: [frameId] }, files: ["content.js"] });
+    return chrome.tabs.sendMessage(tab.id, msg, opts);
   }
 }
 async function hud(tab, line) {
@@ -9476,22 +9473,55 @@ async function hud(tab, line) {
   } catch (_) {
   }
 }
-async function fetchSlot() {
-  return {
-    ok: false,
-    code: "local_secret_store_required",
-    error: "Local relayd secret slots are unavailable in direct NATS mode; use browser-to-browser relay/move."
-  };
-}
 function strip(res, v, i) {
   const r = { i, v, ok: !!(res && res.ok) };
   if (res && res.error) r.error = res.error;
   if (res && typeof res.len === "number") r.len = res.len;
+  if (res && res.code) r.code = res.code;
   return r;
 }
+var CONTENT_OPS = {
+  hover: ["sel"],
+  dblclick: ["sel"],
+  rightClick: ["sel"],
+  highlight: ["sel", "color", "ms"],
+  mouseDrag: ["sel", "dx", "dy", "moves"],
+  select: ["sel", "value", "label", "index"],
+  scroll: ["sel", "align", "x", "y", "byX", "byY"],
+  getText: ["sel", "max"],
+  getHTML: ["sel", "outer", "max"],
+  media: ["sel", "action", "value"],
+  uploadFile: ["sel", "name", "mime", "text", "url", "dataUrl"]
+};
+var OP_FIELDS = {
+  hover: ["hit"],
+  dblclick: ["hit"],
+  rightClick: ["hit"],
+  highlight: ["hit"],
+  mouseDrag: ["from", "to"],
+  select: ["index", "count"],
+  scroll: ["mode", "x", "y", "maxY", "box"],
+  getText: ["text", "truncated"],
+  getHTML: ["html", "truncated"],
+  media: ["action", "paused", "muted", "volume", "rate", "currentTime", "duration", "ended", "readyState", "src"],
+  uploadFile: ["name", "bytes", "via", "setFiles", "dropped"]
+};
 async function runStep(step, i, id) {
   const run = (tab, sel) => tab && hud(tab, { id, i, v: step.v, sel, phase: "run" });
   const done = (tab, sel, r) => tab && hud(tab, Object.assign({ id, i, v: step.v, sel }, r));
+  const fid = Number.isInteger(step.frameId) ? step.frameId : 0;
+  const send$ = (tab, msg, f = fid) => send(tab, msg, f);
+  if (CONTENT_OPS[step.v]) {
+    const tab = await tabFor(step.tab);
+    run(tab, step.sel);
+    const msg = { op: step.v };
+    for (const k of CONTENT_OPS[step.v]) if (step[k] !== void 0) msg[k] = step[k];
+    const res = await send$(tab, msg);
+    const r = strip(res, step.v, i);
+    for (const k of OP_FIELDS[step.v] || []) if (res && res[k] !== void 0) r[k] = res[k];
+    done(tab, step.sel, r);
+    return r;
+  }
   switch (step.v) {
     case "script": {
       if (!chrome.userScripts?.execute) return { i, v: "script", ok: false, code: "user_scripts_unavailable", error: "Chrome 135+ ve eklenti ayr\u0131nt\u0131lar\u0131nda kullan\u0131c\u0131 script izni gerekir." };
@@ -9622,7 +9652,7 @@ async function runStep(step, i, id) {
     case "waitFor": {
       const tab = await tabFor(step.tab);
       run(tab, step.sel);
-      const res = await send(tab, { op: "waitFor", sel: step.sel, timeout: step.timeout, grow: !!step.grow, quiet: step.quiet });
+      const res = await send$(tab, { op: "waitFor", sel: step.sel, timeout: step.timeout, grow: !!step.grow, quiet: step.quiet });
       const r = strip(res, "waitFor", i);
       if (res && typeof res.count === "number") r.count = res.count;
       done(tab, step.sel, r);
@@ -9631,7 +9661,7 @@ async function runStep(step, i, id) {
     case "click": {
       const tab = await tabFor(step.tab);
       run(tab, step.sel);
-      const res = await send(tab, { op: "click", sel: step.sel });
+      const res = await send$(tab, { op: "click", sel: step.sel });
       const r = strip(res, "click", i);
       if (res && res.hit) r.hit = res.hit;
       done(tab, step.sel, r);
@@ -9640,7 +9670,7 @@ async function runStep(step, i, id) {
     case "captcha": {
       const tab = await tabFor(step.tab);
       run(tab, null);
-      const res = await send(tab, { op: "captcha", wait: !!step.wait, timeout: step.timeout });
+      const res = await send$(tab, { op: "captcha", wait: !!step.wait, timeout: step.timeout });
       const r = strip(res, "captcha", i);
       if (res) {
         r.present = !!res.present;
@@ -9657,67 +9687,21 @@ async function runStep(step, i, id) {
           i,
           v: "fill",
           ok: false,
-          code: "secret_ref_needs_put",
-          error: 'fill takes literals only; name the source on a v:"put" step'
+          code: "secret_ref_unsupported",
+          error: "fill takes literals only; use relay/move/swap to carry a value between fields"
         };
       }
       const tab = await tabFor(step.tab);
       run(tab, step.sel);
-      const res = await send(tab, { op: "fill", sel: step.sel, literal: step.literal });
+      const res = await send$(tab, { op: "fill", sel: step.sel, literal: step.literal });
       const r = strip(res, "fill", i);
-      done(tab, step.sel, r);
-      return r;
-    }
-    case "put": {
-      if (step.literal !== void 0) {
-        return {
-          i,
-          v: "put",
-          ok: false,
-          code: "literal_needs_fill",
-          error: "put takes a secret ref (resolved to a slot), not a literal"
-        };
-      }
-      if (!step.slot) {
-        return {
-          i,
-          v: "put",
-          ok: false,
-          code: "no_slot",
-          error: "put step has no slot: relayd did not resolve a secret ref"
-        };
-      }
-      const tab = await tabFor(step.tab);
-      run(tab, step.sel);
-      const got = await fetchSlot(step.slot, id);
-      if (!got.ok) {
-        const r2 = { i, v: "put", ok: false, code: got.code, error: got.error };
-        done(tab, step.sel, r2);
-        return r2;
-      }
-      if (!got._v) {
-        const r2 = {
-          i,
-          v: "put",
-          ok: false,
-          code: "secret_empty",
-          error: "slot answered an empty value; nothing written"
-        };
-        done(tab, step.sel, r2);
-        return r2;
-      }
-      const res = await send(tab, { op: "writeRaw", sel: step.sel, _v: got._v, mask: step.mask === true });
-      const ok = !!(res && res.ok);
-      const r = { i, v: "put", ok, len: ok ? res.len : void 0, error: res && res.error };
-      if (step.mask === true) r.masked = ok ? !!(res && res.masked) : void 0;
-      got._v = void 0;
       done(tab, step.sel, r);
       return r;
     }
     case "assert": {
       const tab = await tabFor(step.tab);
       run(tab, step.sel);
-      const res = await send(tab, { op: "assert", sel: step.sel, has: step.has, eq: step.eq, absent: step.absent });
+      const res = await send$(tab, { op: "assert", sel: step.sel, has: step.has, eq: step.eq, absent: step.absent });
       const r = strip(res, "assert", i);
       if (!r.ok && !r.error) {
         r.code = "assert_failed";
@@ -9729,7 +9713,7 @@ async function runStep(step, i, id) {
     case "query": {
       const tab = await tabFor(step.tab);
       run(tab, step.sel);
-      const res = await send(tab, { op: "query", sel: step.sel, limit: step.limit, text: step.text === true });
+      const res = await send$(tab, { op: "query", sel: step.sel, limit: step.limit, text: step.text === true });
       const r = strip(res, "query", i);
       if (res && typeof res.count === "number") r.count = res.count;
       if (res && typeof res.shown === "number") r.shown = res.shown;
@@ -9740,7 +9724,7 @@ async function runStep(step, i, id) {
     case "clear": {
       const tab = await tabFor(step.tab);
       run(tab, step.sel);
-      const res = await send(tab, { op: "clearRaw", sel: step.sel });
+      const res = await send$(tab, { op: "clearRaw", sel: step.sel });
       const r = { i, v: "clear", ok: !!(res && res.ok) };
       done(tab, step.sel, r);
       return r;
@@ -9748,7 +9732,7 @@ async function runStep(step, i, id) {
     case "setStore": {
       const tab = await tabFor(step.tab);
       run(tab, step.sel);
-      const res = await send(tab, { op: "setStore", sel: step.sel, value: step.value, remove: step.remove === true });
+      const res = await send$(tab, { op: "setStore", sel: step.sel, value: step.value, remove: step.remove === true });
       const r = strip(res, "setStore", i);
       if (res && typeof res.cleared === "number") r.cleared = res.cleared;
       if (res && typeof res.left === "number") r.left = res.left;
@@ -9756,11 +9740,21 @@ async function runStep(step, i, id) {
       done(tab, step.sel, r);
       return r;
     }
+    case "drag": {
+      const tab = await tabFor(step.tab);
+      const from = step.from && step.from.sel || null, to = step.to && step.to.sel || null;
+      run(tab, from);
+      const res = await send$(tab, { op: "drag", from: { sel: from }, to: { sel: to } });
+      const r = strip(res, "drag", i);
+      for (const k of ["handled", "from", "to"]) if (res && res[k] !== void 0) r[k] = res[k];
+      done(tab, from, r);
+      return r;
+    }
     case "relay": {
       const src = await tabFor(step.from.tab), dst = await tabFor(step.to.tab);
       run(src, step.from.sel);
       run(dst, step.to.sel);
-      const rd = await send(src, { op: "readRaw", sel: step.from.sel });
+      const rd = await send$(src, { op: "readRaw", sel: step.from.sel }, step.from.frameId);
       if (!rd || !rd.ok) {
         const r2 = { i, v: "relay", ok: false, error: rd && rd.error || "read failed" };
         done(src, step.from.sel, r2);
@@ -9771,7 +9765,7 @@ async function runStep(step, i, id) {
         done(src, step.from.sel, r2);
         return r2;
       }
-      const wr = await send(dst, { op: "writeRaw", sel: step.to.sel, _v: rd._v });
+      const wr = await send$(dst, { op: "writeRaw", sel: step.to.sel, _v: rd._v }, step.to.frameId);
       const r = strip(wr, "relay", i);
       done(src, step.from.sel, { ok: true, len: (rd._v || "").length });
       done(dst, step.to.sel, r);
@@ -9781,10 +9775,10 @@ async function runStep(step, i, id) {
       const ta = await tabFor(step.a.tab), tb = await tabFor(step.b.tab);
       run(ta, step.a.sel);
       run(tb, step.b.sel);
-      const ra = await send(ta, { op: "readRaw", sel: step.a.sel });
-      const rb = await send(tb, { op: "readRaw", sel: step.b.sel });
-      await send(ta, { op: "writeRaw", sel: step.a.sel, _v: rb._v });
-      const w2 = await send(tb, { op: "writeRaw", sel: step.b.sel, _v: ra._v });
+      const ra = await send$(ta, { op: "readRaw", sel: step.a.sel }, step.a.frameId);
+      const rb = await send$(tb, { op: "readRaw", sel: step.b.sel }, step.b.frameId);
+      await send$(ta, { op: "writeRaw", sel: step.a.sel, _v: rb._v }, step.a.frameId);
+      const w2 = await send$(tb, { op: "writeRaw", sel: step.b.sel, _v: ra._v }, step.b.frameId);
       const r = { i, v: "swap", ok: !!(ra.ok && rb.ok && w2.ok), len: w2 && w2.len || 0 };
       done(ta, step.a.sel, r);
       done(tb, step.b.sel, r);
@@ -9794,7 +9788,7 @@ async function runStep(step, i, id) {
       const src = await tabFor(step.from.tab), dst = await tabFor(step.to.tab);
       run(src, step.from.sel);
       run(dst, step.to.sel);
-      const rd = await send(src, { op: "readRaw", sel: step.from.sel });
+      const rd = await send$(src, { op: "readRaw", sel: step.from.sel }, step.from.frameId);
       if (!rd || !rd.ok) {
         const r2 = { i, v: "move", ok: false, error: "read failed" };
         done(src, step.from.sel, r2);
@@ -9805,8 +9799,8 @@ async function runStep(step, i, id) {
         done(src, step.from.sel, r2);
         return r2;
       }
-      await send(src, { op: "clearRaw", sel: step.from.sel });
-      const wr = await send(dst, { op: "writeRaw", sel: step.to.sel, _v: rd._v });
+      await send$(src, { op: "clearRaw", sel: step.from.sel }, step.from.frameId);
+      const wr = await send$(dst, { op: "writeRaw", sel: step.to.sel, _v: rd._v }, step.to.frameId);
       const r = strip(wr, "move", i);
       done(src, step.from.sel, { ok: true, len: (rd._v || "").length });
       done(dst, step.to.sel, r);
@@ -9895,12 +9889,12 @@ async function runStep(step, i, id) {
       const t = await tabFor(step.tab);
       await chrome.tabs.update(t.id, { active: true });
       if (t.windowId != null) await chrome.windows.update(t.windowId, { focused: true });
-      return { i, v: "activate", ok: true, tabId: t.id, windowId: t.windowId, url: t.url, title: t.title };
+      return { i, v: "activate", ok: true, tabId: t.id, windowId: t.windowId, url: safeUrl(t.url), title: t.title };
     }
     case "key": {
       const tab = await tabFor(step.tab);
       run(tab, step.sel);
-      const res = await send(tab, { op: "key", sel: step.sel, key: step.key, code: step.code });
+      const res = await send$(tab, { op: "key", sel: step.sel, key: step.key, code: step.code });
       const r = strip(res, "key", i);
       done(tab, step.sel, r);
       return r;
@@ -9908,11 +9902,152 @@ async function runStep(step, i, id) {
     case "inject": {
       const tab = await tabFor(step.tab);
       run(tab, step.anchor || step.kind);
-      const res = await send(tab, { op: "inject", kind: step.kind, id: step.id, html: step.html, text: step.text, anchor: step.anchor, copyFrom: step.copyFrom, css: step.css });
+      const res = await send$(tab, { op: "inject", kind: step.kind, id: step.id, html: step.html, text: step.text, anchor: step.anchor, copyFrom: step.copyFrom, css: step.css });
       const r = strip(res, "inject", i);
       r.anchored = !!(res && res.anchored);
       done(tab, step.anchor, r);
       return r;
+    }
+    // ── frame inventory ────────────────────────────────────────────
+    // The answer to "which frame do I address?". A cross-origin iframe is a
+    // separate document with its own frameId; every DOM verb takes that id, so
+    // an embedded player, checkout or consent frame is reachable without
+    // attaching a debugger to the browser.
+    case "frames": {
+      const tab = await tabFor(step.tab);
+      if (!chrome.webNavigation?.getAllFrames) {
+        return { i, v: "frames", ok: false, code: "frames_unavailable", error: "webNavigation API unavailable" };
+      }
+      const all = await chrome.webNavigation.getAllFrames({ tabId: tab.id });
+      return {
+        i,
+        v: "frames",
+        ok: true,
+        tabId: tab.id,
+        count: all.length,
+        frames: all.map((f) => ({
+          frameId: f.frameId,
+          parentFrameId: f.parentFrameId,
+          url: safeUrl(f.url),
+          error: f.errorOccurred ? true : void 0
+        }))
+      };
+    }
+    // ── pixels ─────────────────────────────────────────────────────
+    case "screenshot": {
+      const tab = await tabFor(step.tab);
+      let raised = false;
+      if (!tab.active) {
+        if (dndMode) {
+          return {
+            i,
+            v: "screenshot",
+            ok: false,
+            code: "dnd_refused",
+            error: "screenshot needs the tab visible; refused under dnd"
+          };
+        }
+        await chrome.tabs.update(tab.id, { active: true });
+        raised = true;
+      }
+      const format = step.format === "png" ? "png" : "jpeg";
+      const quality = Math.max(10, Math.min(100, Number(step.quality) || 70));
+      const raw = await chrome.tabs.captureVisibleTab(
+        tab.windowId,
+        format === "png" ? { format: "png" } : { format: "jpeg", quality }
+      );
+      const dataUrl = await shrinkImage(raw, Number(step.maxWidth) || 1280, format, quality);
+      const bytes = Math.round((dataUrl.length - dataUrl.indexOf(",") - 1) * 0.75);
+      if (bytes > MAX_IMAGE_BYTES) {
+        return {
+          i,
+          v: "screenshot",
+          ok: false,
+          code: "screenshot_too_large",
+          bytes,
+          error: "image exceeds the NATS payload budget; lower maxWidth or quality"
+        };
+      }
+      return {
+        i,
+        v: "screenshot",
+        ok: true,
+        tabId: tab.id,
+        windowId: tab.windowId,
+        format,
+        bytes,
+        raised: raised || void 0,
+        dataUrl
+      };
+    }
+    // ── session history ────────────────────────────────────────────
+    case "history": {
+      const tab = await tabFor(step.tab);
+      const action = step.action || "back";
+      const go = { back: chrome.tabs.goBack, forward: chrome.tabs.goForward, reload: chrome.tabs.reload }[action];
+      if (!go) return { i, v: "history", ok: false, code: "bad_action", error: "history action must be back, forward or reload" };
+      try {
+        await go(tab.id);
+      } catch (e) {
+        return { i, v: "history", ok: false, code: "no_history", error: String(e && e.message || e) };
+      }
+      const loaded = await waitStatus(tab.id, "complete", step.loadTimeout);
+      const r = { i, v: "history", ok: loaded === "complete", action, loaded };
+      if (!r.ok) r.error = "page did not finish loading (" + loaded + ")";
+      return r;
+    }
+    // ── cookies (metadata out, never values) ───────────────────────
+    case "cookies": {
+      if (!chrome.cookies) return { i, v: "cookies", ok: false, code: "cookies_unavailable", error: "cookies API unavailable" };
+      const action = step.action || "list";
+      let url = step.url;
+      if (!url && !step.domain) {
+        const tab = await tabFor(step.tab);
+        url = tab.url;
+      }
+      if (action === "list") {
+        const q = step.domain ? { domain: step.domain } : { url };
+        if (step.name) q.name = step.name;
+        const all = await chrome.cookies.getAll(q);
+        const limit = Math.min(Math.max(Number(step.limit) || 50, 1), 200);
+        return {
+          i,
+          v: "cookies",
+          ok: true,
+          count: all.length,
+          shown: Math.min(all.length, limit),
+          cookies: all.slice(0, limit).map((c) => ({
+            name: c.name,
+            domain: c.domain,
+            path: c.path,
+            secure: !!c.secure,
+            httpOnly: !!c.httpOnly,
+            session: !!c.session,
+            sameSite: c.sameSite,
+            expires: c.expirationDate || null
+          }))
+        };
+      }
+      if (!url || !step.name) return { i, v: "cookies", ok: false, code: "bad_cookie_target", error: "cookies set/remove need url and name" };
+      if (action === "remove") {
+        const gone = await chrome.cookies.remove({ url, name: step.name });
+        return { i, v: "cookies", ok: !!gone, removed: !!gone, name: step.name };
+      }
+      if (action === "set") {
+        if (typeof step.value !== "string") return { i, v: "cookies", ok: false, code: "field_empty", error: "cookies set needs a string value" };
+        const c = await chrome.cookies.set({
+          url,
+          name: step.name,
+          value: step.value,
+          path: step.path || "/",
+          secure: step.secure === true,
+          httpOnly: step.httpOnly === true,
+          sameSite: step.sameSite || "lax",
+          ...Number.isFinite(step.expires) ? { expirationDate: step.expires } : {}
+        });
+        return { i, v: "cookies", ok: !!c, name: step.name, len: step.value.length };
+      }
+      return { i, v: "cookies", ok: false, code: "bad_action", error: "cookies action must be list, set or remove" };
     }
     default:
       return { i, v: step.v, ok: false, error: "unknown verb" };
@@ -10003,17 +10138,18 @@ chrome.windows.onCreated.addListener(helloSoon);
 chrome.windows.onRemoved.addListener(helloSoon);
 
 // src/protocol.js
-var DEFAULTS = { enabled: false, url: "ws://127.0.0.1:8222", prefix: "mesh.browser", label: "", token: "", user: "", pass: "", creds: "" };
+var DEFAULTS = { enabled: false, url: "ws://127.0.0.1:8222", prefix: "extvianats.browser", label: "", token: "", user: "", pass: "", creds: "" };
+var fail = (code, message) => Object.assign(new Error(message), { code });
 function validateConfig(raw) {
   const c = { ...DEFAULTS, ...raw };
   const u = new URL(c.url);
-  if (!["ws:", "wss:"].includes(u.protocol) || u.username || u.password) throw new Error("NATS WebSocket adresi ws:// veya wss:// olmal\u0131; kimlik bilgilerini ayr\u0131 alanlara yaz\u0131n.");
-  if (!/^[a-zA-Z0-9_-]+(?:\.[a-zA-Z0-9_-]+)*$/.test(c.prefix)) throw new Error("Ge\xE7ersiz konu \xF6neki.");
-  if (c.token && (c.user || c.pass || c.creds) || c.creds && (c.user || c.pass)) throw new Error("Tek bir kimlik do\u011Frulama y\xF6ntemi se\xE7in.");
+  if (!["ws:", "wss:"].includes(u.protocol) || u.username || u.password) throw fail("bad_url", "The NATS address must be ws:// or wss://. Put credentials in their own fields, not in the URL.");
+  if (!/^[a-zA-Z0-9_-]+(?:\.[a-zA-Z0-9_-]+)*$/.test(c.prefix)) throw fail("bad_prefix", "Invalid subject prefix: use letters, digits, _ and - separated by dots.");
+  if (c.token && (c.user || c.pass || c.creds) || c.creds && (c.user || c.pass)) throw fail("auth_conflict", "Pick one authentication method: token, user/password, or .creds.");
   return c;
 }
 function subjects(prefix, id) {
-  if (!/^[a-zA-Z0-9_-]+$/.test(id)) throw new Error("Ge\xE7ersiz profil kimli\u011Fi.");
+  if (!/^[a-zA-Z0-9_-]+$/.test(id)) throw fail("bad_inst", "Invalid profile identity.");
   return {
     cmd: `${prefix}.cmd.${id}`,
     abort: `${prefix}.abort.${id}`,
@@ -10026,10 +10162,10 @@ function subjects(prefix, id) {
   };
 }
 function validateCommand(cmd) {
-  if (!cmd || typeof cmd.id !== "string" || !/^[a-zA-Z0-9_-]{1,128}$/.test(cmd.id)) throw new Error("Komut id gerekli (1\u2013128 harf/rakam/_/-).");
-  if (!Array.isArray(cmd.steps) || cmd.steps.length === 0 || cmd.steps.length > 200) throw new Error("steps 1\u2013200 ad\u0131m i\xE7ermeli.");
+  if (!cmd || typeof cmd.id !== "string" || !/^[a-zA-Z0-9_-]{1,128}$/.test(cmd.id)) throw fail("bad_command_id", "A command id is required (1-128 letters, digits, _ or -).");
+  if (!Array.isArray(cmd.steps) || cmd.steps.length === 0 || cmd.steps.length > 200) throw fail("bad_steps", "steps must contain 1-200 entries.");
   for (const s of cmd.steps) {
-    if (!s || typeof s !== "object" || s.v !== void 0 && typeof s.v !== "string") throw new Error("Ge\xE7ersiz ad\u0131m.");
+    if (!s || typeof s !== "object" || s.v !== void 0 && typeof s.v !== "string") throw fail("bad_step", "Invalid step.");
   }
   return cmd;
 }
@@ -10043,7 +10179,7 @@ var connecting = null;
 var generation = 0;
 var encoder = new TextEncoder();
 var encode = (x) => encoder.encode(JSON.stringify(x));
-var status = (state, error = null) => chrome.storage.session.set({ meshStatus: { state, error, at: Date.now() } });
+var status = (state, error = null) => chrome.storage.session.set({ extViaNatsStatus: { state, error, at: Date.now() } });
 var emit = (subject, data) => {
   if (nc && !nc.isClosed()) nc.publish(subject, encode(data));
 };
@@ -10071,20 +10207,20 @@ async function handleCommand(msg) {
   active = cmd.id;
   try {
     const hash = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", encode(cmd)))).map((b) => b.toString(16).padStart(2, "0")).join("");
-    const { meshLedger = {} } = await chrome.storage.local.get("meshLedger");
-    const previous = Object.hasOwn(meshLedger, cmd.id) ? meshLedger[cmd.id] : null;
+    const { extViaNatsLedger = {} } = await chrome.storage.local.get("extViaNatsLedger");
+    const previous = Object.hasOwn(extViaNatsLedger, cmd.id) ? extViaNatsLedger[cmd.id] : null;
     if (previous) {
       await respond(msg, previous.hash !== hash ? { ok: false, id: cmd.id, code: "id_conflict" } : previous.result || { ok: false, id: cmd.id, code: "interrupted", error: "\xD6nceki \xE7al\u0131\u015Fman\u0131n sonucu belirsiz; otomatik tekrar \xE7al\u0131\u015Ft\u0131r\u0131lmad\u0131." });
       return;
     }
-    const ledger = Object.fromEntries(Object.entries(meshLedger).slice(-99));
+    const ledger = Object.fromEntries(Object.entries(extViaNatsLedger).slice(-99));
     ledger[cmd.id] = { hash, at: Date.now() };
-    await chrome.storage.local.set({ meshLedger: ledger });
+    await chrome.storage.local.set({ extViaNatsLedger: ledger });
     emit(topic.stream, { id: cmd.id, phase: "started" });
     const result = { id: cmd.id, ...await execute(cmd) };
     result.ok = !result.err && !result.aborted && result.receipts.every((r) => r.ok);
     ledger[cmd.id].result = result;
-    await chrome.storage.local.set({ meshLedger: ledger });
+    await chrome.storage.local.set({ extViaNatsLedger: ledger });
     emit(topic.stream, { id: cmd.id, phase: "done", ok: result.ok });
     await respond(msg, result);
   } catch {
@@ -10112,8 +10248,8 @@ async function start() {
   const ticket = generation;
   connecting = (async () => {
     await storageReady;
-    const { meshConfig } = await chrome.storage.local.get("meshConfig");
-    config = validateConfig(meshConfig || DEFAULTS);
+    const { extViaNatsConfig } = await chrome.storage.local.get("extViaNatsConfig");
+    config = validateConfig(extViaNatsConfig || DEFAULTS);
     if (!config.enabled) {
       await status("disabled");
       return;
@@ -10123,7 +10259,7 @@ async function start() {
     topic = subjects(config.prefix, id);
     const client = await (0, import_nats_core.wsconnect)({
       servers: config.url,
-      name: `remote-mesh-${id}`,
+      name: `ext-via-nats-${id}`,
       timeout: 5e3,
       pingInterval: 15e3,
       maxReconnectAttempts: -1,
@@ -10178,7 +10314,7 @@ async function start() {
   return connecting;
 }
 chrome.storage.onChanged.addListener((changes, area) => {
-  if (area !== "local" || !changes.meshConfig) return;
+  if (area !== "local" || !changes.extViaNatsConfig) return;
   generation++;
   if (active) abortCommand(active);
   void (async () => {
@@ -10195,9 +10331,9 @@ chrome.runtime.onStartup.addListener(() => {
 chrome.runtime.onInstalled.addListener(() => {
   void start();
 });
-chrome.alarms.create("mesh-reconnect", { periodInMinutes: 0.5 });
+chrome.alarms.create("ext-via-nats-reconnect", { periodInMinutes: 0.5 });
 chrome.alarms.onAlarm.addListener((a) => {
-  if (a.name === "mesh-reconnect") void start();
+  if (a.name === "ext-via-nats-reconnect") void start();
 });
 setInterval(() => {
   void heartbeat().catch(() => {

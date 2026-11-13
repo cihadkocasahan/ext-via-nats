@@ -1,18 +1,14 @@
 <!doctype html>
 <!--
-  harness.html — the provenance marker and (later) the approval surface.
+  harness.html — the window ownership marker.
 
-  A window carrying a tab of this page is a window the relay opened. `close`
-  reads ownership back from here instead of guessing from timestamps, so a
-  window the operator opened in the same profile can never be mistaken for
-  ours, and one we opened stays identifiable across a restart.
-
-  It is also the only surface in this extension where a human can be asked to
-  approve something: content scripts do not run on extension pages, so a picker
-  has to live here rather than in a tab's DOM.
+  A window carrying a tab of this page is a window this extension opened.
+  `close` reads ownership back from the tab URL in the service worker instead of
+  guessing from timestamps, so a window the operator opened in the same profile
+  can never be mistaken for ours, and one we opened stays identifiable across a
+  restart. Closing this tab by hand simply releases the claim.
 -->
-<meta charset="utf-8">
-<title>Agent Relay</title>
+<html lang="en"><meta charset="utf-8"><title>ExtViaNats session marker</title>
 <style>
   body { font: 13px/1.5 system-ui, sans-serif; margin: 24px; color: #202124; }
   h1 { font-size: 15px; margin: 0 0 12px; }
@@ -21,19 +17,16 @@
   dd { margin: 0; font-family: ui-monospace, Consolas, monospace; word-break: break-all; }
   .run { margin-top: 16px; padding: 8px 10px; background: #f1f3f4; border-radius: 6px; }
 </style>
-<h1>Agent Relay oturum işareti</h1>
-<p>Bu sekme pencerenin relay tarafından açıldığını belirtir. Kapatabilirsin —
-  kapanması o pencereyi listesinden düşürür, başka hiçbir pencereye dokunmaz.</p>
+<h1>ExtViaNats session marker</h1>
+<p>This tab marks the window as opened by ExtViaNats. You can close it — that
+  only releases this window from the owned list, it never touches another window.</p>
 <dl>
   <dt>run</dt><dd id="run">—</dd>
-  <dt>başlatan</dt><dd id="launched">—</dd>
-  <dt>görev</dt><dd id="task">—</dd>
-  <dt>amaç</dt><dd id="purpose">—</dd>
   <dt>inst</dt><dd id="inst">—</dd>
-  <dt>sürüm</dt><dd id="ver">—</dd>
+  <dt>version</dt><dd id="ver">—</dd>
   <dt>build</dt><dd id="build">—</dd>
-  <dt>hesap</dt><dd id="acct">—</dd>
-  <dt>pencereler</dt><dd id="wins">—</dd>
+  <dt>windows</dt><dd id="wins">—</dd>
 </dl>
-<div class="run" id="note">kayıt bekleniyor…</div>
+<div class="run" id="note">waiting for the service worker…</div>
 <script src="harness.js"></script>
+</html>

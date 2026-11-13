@@ -2,5 +2,10 @@ node_modules/
 .local/
 *.zip
 *.creds
+secrets/
 .env
 *.launches.json
+
+# Private session exports and local notes — never publish
+NATS Bağlantılı Chrome Eklentisi.md
+*.local.md

@@ -1,9 +1,21 @@
 {
   "mcpServers": {
-    "remote-mesh": {
+    "ext-via-nats": {
       "command": "node",
-      "args": ["/absolute/path/RemoteMeshExtension/scripts/mcp.mjs"],
-      "env": { "REMOTE_MESH_URL": "ws://127.0.0.1:18222" }
+      "args": ["/absolute/path/to/ext-via-nats/scripts/mcp.mjs"],
+      "env": {
+        "EXT_VIA_NATS_URL": "ws://127.0.0.1:18222",
+        "EXT_VIA_NATS_PREFIX": "extvianats.browser"
+      }
+    },
+    "ext-via-nats-cloud": {
+      "command": "node",
+      "args": ["/absolute/path/to/ext-via-nats/scripts/mcp.mjs"],
+      "env": {
+        "EXT_VIA_NATS_URL": "wss://connect.ngs.global:443",
+        "EXT_VIA_NATS_PREFIX": "extvianats.browser",
+        "EXT_VIA_NATS_CREDS": "/absolute/path/to/your-user.creds"
+      }
     }
   }
 }

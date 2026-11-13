@@ -7,6 +7,6 @@ test('local/cloud endpoints and subject boundaries', () => {
   for (const url of ['nats://localhost:4222', 'https://localhost', 'ws://user:secret@localhost']) assert.throws(() => validateConfig({ url }));
   assert.throws(() => validateConfig({ prefix: 'mesh.>' }));
   assert.throws(() => validateConfig({ token: 'x', user: 'u' }));
-  assert.throws(() => subjects('mesh.browser', 'other.*'));
+  assert.throws(() => subjects('extvianats.browser', 'other.*'));
   assert.throws(() => validateCommand({ id: 'x', steps: [] }));
 });

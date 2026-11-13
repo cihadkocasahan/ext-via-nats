@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
-import { RemoteMeshClient } from './client.mjs';
+import { ExtViaNatsClient } from './client.mjs';
 const [action, inst, arg] = process.argv.slice(2);
-const client = new RemoteMeshClient();
+const client = new ExtViaNatsClient();
 try {
   let result;
   switch (action) {

@@ -2,11 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { build } from 'esbuild';
 import vm from 'node:vm';
-import { readFile, mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import path from 'node:path';
-import { spawnSync, spawn } from 'node:child_process';
-import { RemoteMeshClient } from '../scripts/client.mjs';
+import { readFile } from 'node:fs/promises';
+import { spawnSync } from 'node:child_process';
+import { ExtViaNatsClient } from '../scripts/client.mjs';
+import { VERBS } from '../src/verbs.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 
@@ -17,7 +16,7 @@ async function until(fn, timeout = 12000) {
   throw new Error('Condition timed out');
 }
 async function worker(url, id, previous = {}) {
-  const data = structuredClone({ ...previous, arInst: id, meshConfig: { enabled: true, url, prefix: 'test.browser' } });
+  const data = structuredClone({ ...previous, extViaNatsInst: id, extViaNatsConfig: { enabled: true, url, prefix: 'extvianats.test' } });
   const session = {};
   const timers = new Set();
   const sockets = new Set();
@@ -47,13 +46,13 @@ async function worker(url, id, previous = {}) {
   vm.runInContext(output.outputFiles[0].text, context);
   const stop = async () => { await context.WorkerTest.shutdown(); for (const t of timers) { clearTimeout(t); clearInterval(t); } for (const s of sockets) s.close(); };
   try { await until(() => {
-    if (session.meshStatus?.state === 'error') throw new Error(JSON.stringify(session.meshStatus));
-    return session.meshStatus?.state === 'connected';
+    if (session.extViaNatsStatus?.state === 'error') throw new Error(JSON.stringify(session.extViaNatsStatus));
+    return session.extViaNatsStatus?.state === 'connected';
   }); } catch (e) { await stop(); throw e; }
   return { data, session, writes: () => writes, stop };
 }
 test('real NATS: isolated profiles, receipts, idempotency, abort, restart and MCP', { timeout: 60000 }, async t => {
-  const name = `remote-mesh-test-${process.pid}`;
+  const name = `ext-via-nats-test-${process.pid}`;
   const docker = args => {
     const r = spawnSync('docker', args, { encoding: 'utf8', timeout: 20000 });
     if (r.status !== 0) throw new Error(r.stderr || r.error?.message || 'docker failed');
@@ -61,12 +60,12 @@ test('real NATS: isolated profiles, receipts, idempotency, abort, restart and MC
   };
   if (!process.env.TEST_NATS_URL) docker(['run', '-d', '--rm', '--name', name, '-p', '127.0.0.1::8222', '--mount', `type=bind,source=${process.cwd()}/infra/nats-docker.conf,target=/etc/nats/nats.conf,readonly`, 'nats:2.11.9-alpine', '-c', '/etc/nats/nats.conf']);
   let a, b;
-  const env = { ...process.env, REMOTE_MESH_URL: process.env.TEST_NATS_URL || `ws://127.0.0.1:${docker(['port', name, '8222']).split(':').at(-1)}`, REMOTE_MESH_PREFIX: 'test.browser' };
-  const client = new RemoteMeshClient(env);
-  let mcp, transport, nodeProcess, fixture;
+  const env = { ...process.env, EXT_VIA_NATS_URL: process.env.TEST_NATS_URL || `ws://127.0.0.1:${docker(['port', name, '8222']).split(':').at(-1)}`, EXT_VIA_NATS_PREFIX: 'extvianats.test' };
+  const client = new ExtViaNatsClient(env);
+  let mcp, transport;
   try {
-    a = await worker(env.REMOTE_MESH_URL, 'profile-a');
-    b = await worker(env.REMOTE_MESH_URL, 'profile-b');
+    a = await worker(env.EXT_VIA_NATS_URL, 'profile-a');
+    b = await worker(env.EXT_VIA_NATS_URL, 'profile-b');
     const list = await client.list(200);
     assert.deepEqual(list.map(p => p.inst).sort(), ['profile-a', 'profile-b']);
     const command = { id: 'fill-1', steps: [{ v: 'fill', tab: { tabId: 1 }, sel: '#field', literal: 'visible text' }] };
@@ -85,33 +84,23 @@ test('real NATS: isolated profiles, receipts, idempotency, abort, restart and MC
     assert.equal((await client.request('profile-a', 'abort', { id: 'abort-1' })).ok, true);
     assert.equal((await run).aborted, true); assert.equal(a.writes(), 1);
     const previous = a.data;
-    await a.stop(); a = await worker(env.REMOTE_MESH_URL, 'profile-a', previous);
+    await a.stop(); a = await worker(env.EXT_VIA_NATS_URL, 'profile-a', previous);
     assert.equal((await client.command('profile-a', command)).ok, true); assert.equal(a.writes(), 0);
     mcp = new Client({ name: 'test', version: '1.0.0' });
     transport = new StdioClientTransport({ command: process.execPath, args: ['scripts/mcp.mjs'], env });
     await mcp.connect(transport);
     const tools = await mcp.listTools();
-    assert.equal(tools.tools.length, 8);
-    const response = await mcp.callTool({ name: 'remote_mesh_command', arguments: { inst: 'profile-b', id: 'mcp-1', steps: [{ v: 'version' }] } });
+    assert.equal(tools.tools.length, 7);
+    const names = tools.tools.map(t => t.name).sort();
+    assert.deepEqual(names, ['ext_via_nats_abort', 'ext_via_nats_command', 'ext_via_nats_info', 'ext_via_nats_profiles',
+      'ext_via_nats_screenshot', 'ext_via_nats_script', 'ext_via_nats_verbs']);
+    const response = await mcp.callTool({ name: 'ext_via_nats_command', arguments: { inst: 'profile-b', id: 'mcp-1', steps: [{ v: 'version' }] } });
     assert.equal(JSON.parse(response.content[0].text).ok, true);
-    fixture = await mkdtemp(path.join(tmpdir(), 'mesh-node-'));
-    await mkdir(path.join(fixture, 'Default'));
-    await writeFile(path.join(fixture, 'Local State'), '{}');
-    await writeFile(path.join(fixture, 'Default', 'Preferences'), JSON.stringify({ account_info: [{ email: 'fixture@example.invalid' }] }));
-    const configFile = path.join(fixture, 'node.json');
-    await writeFile(configFile, JSON.stringify({ nodeId: 'fixture-node', chromePath: process.execPath, extensionId: 'a'.repeat(32), userDataPaths: [fixture] }));
-    nodeProcess = spawn(process.execPath, ['scripts/node-agent.mjs', configFile], { env, stdio: ['ignore', 'ignore', 'pipe'] });
-    await new Promise((resolve, reject) => { nodeProcess.once('error', reject); nodeProcess.stderr.once('data', resolve); nodeProcess.once('exit', code => reject(new Error(`node agent exited ${code}`))); });
-    const disk = await client.nodeRequest('fixture-node', 'profiles');
-    assert.equal(disk.profiles.length, 1);
-    const preview = await client.nodeRequest('fixture-node', 'launch', { profileId: disk.profiles[0].profileId, requestId: 'launch-test', apply: false });
-    assert.equal(preview.state, 'preview'); assert.equal(preview.applied, false);
-    const denied = await client.nodeRequest('fixture-node', 'launch', { profileId: 'not-found', requestId: 'launch-missing', apply: false });
-    assert.equal(denied.ok, false);
+    const catalog = JSON.parse((await mcp.callTool({ name: 'ext_via_nats_verbs', arguments: {} })).content[0].text);
+    assert.equal(catalog.verbs.length, VERBS.length);
+    assert(catalog.verbs.every(v => v.note && v.fields));
     await assert.rejects(client.request('not-running', 'info', {}, 300));
   } finally {
-    if (nodeProcess && nodeProcess.exitCode === null) { const exited = new Promise(resolve => nodeProcess.once('exit', resolve)); nodeProcess.kill(); await exited; }
-    if (fixture) await rm(fixture, { recursive: true, force: true });
     await mcp?.close(); await transport?.close(); await a?.stop(); await b?.stop(); await client.close();
     if (!process.env.TEST_NATS_URL) docker(['stop', name]);
   }

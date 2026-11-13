@@ -1,14 +1,15 @@
 {
   "manifest_version": 3,
-  "name": "Remote Mesh",
+  "name": "ExtViaNats",
   "version": "0.1.0",
-  "description": "Yerel veya bulut NATS üzerinden profil bazlı uzak tarayıcı komutları.",
+  "description": "Profile-scoped remote browser commands over local or cloud NATS, driven by MCP agents.",
   "permissions": [
     "tabs",
     "scripting",
     "storage",
     "alarms",
-    "identity",
+    "webNavigation",
+    "cookies",
     "userScripts",
     "clipboardWrite"
   ],
@@ -27,13 +28,15 @@
       "js": [
         "content.js"
       ],
+      "all_frames": true,
+      "match_about_blank": true,
       "run_at": "document_idle"
     }
   ],
   "minimum_chrome_version": "120",
   "options_page": "options.html",
   "action": {
-    "default_title": "Remote Mesh bağlantı ayarları"
+    "default_title": "ExtViaNats connection settings"
   },
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAm93FDX7RKgrf/dcU/T+c0U4M82O/Ko7JxYXOPpYfCQ3G/hOO8U5kzvmelI6muK6wF64lz8HXk+RwFok2fev8lfZpkhRwVHFuo+qWTPGNj/e/lFOg1s3KQOA5qaVM51SVy4znTKQeUdTYZAH/3r0TJmylej7XfGJxihOPlEYw3sK3lcoMGHSI9T5ssgwNLAX9FBbY8Tb4xAB7uWKGWDiMn8o1FwC1Cc2oEQfeGE71igl78bkH7h79rkJN2iPT6FBDMMK0fATHEqOwO8B2eM/AgkAx5J0Oq6FumUjn+MNBLw19HWttpY0nKcZ9XDaJ1yBE0xkhFRlkguBKktDaWOQtewIDAQAB"
 }
