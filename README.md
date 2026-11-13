@@ -1,6 +1,6 @@
 # ExtViaNats
 
-**English** · [Türkçe](README.tr.md)
+<a href="README.md"><img src="https://flagcdn.com/20x15/gb.png" width="20" height="15" alt=""> <strong>English</strong></a> &nbsp;·&nbsp; <a href="README.tr.md"><img src="https://flagcdn.com/20x15/tr.png" width="20" height="15" alt=""> Türkçe</a>
 
 Connect an MCP-capable client to a **real, already-signed-in Chrome** on another
 machine — over NATS. No API, no direct IP connection, no debug port: every command

@@ -1,6 +1,6 @@
 # ExtViaNats
 
-[English](README.md) · **Türkçe**
+<a href="README.md"><img src="https://flagcdn.com/20x15/gb.png" width="20" height="15" alt=""> English</a> &nbsp;·&nbsp; <a href="README.tr.md"><img src="https://flagcdn.com/20x15/tr.png" width="20" height="15" alt=""> <strong>Türkçe</strong></a>
 
 MCP destekli bir istemciyi, başka bir makinedeki **gerçek, zaten oturum açmış
 Chrome**'a bağlayın — NATS üzerinden. API yok, doğrudan IP bağlantısı yok, hata
