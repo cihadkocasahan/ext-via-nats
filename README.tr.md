@@ -377,6 +377,31 @@ Linux veya WAN kabulünün yerini tutmaz.
   ajan için rehberdir, kriptografik bir kapı değil.
 - Bir `.creds` dosyası JWT ve nkey seed içerir. Parola gibi davranın.
 
+## Sorumluluk reddi
+
+Bu depo bir **kullanım örneğidir**; olduğu gibi, hiçbir garanti verilmeden
+sunulur. Yazarlar, kullanımından doğacak zarar, veri kaybı, hesap işlemleri veya
+maliyetlerden sorumlu tutulamaz.
+
+- **Gerçek, oturum açmış bir tarayıcıyı sürer.** Komutlar sayfa içeriğini okuyabilir,
+  form gönderebilir, veri silebilir, sizin adınıza satın alma yapabilir veya mesaj
+  gönderebilir. Yalnızca kendi kontrolünüzdeki profilleri ve hizmet koşulları
+  otomasyona izin veren siteleri otomatikleştirin.
+- **Erişimi paylaşmak kimliği paylaşmaktır.** Bir profilin `cmd` konusuna yayın
+  yapabilen NATS kimliğine sahip herkes, o profilin oturum açtığı her sitede sizin
+  adınıza işlem yapabilir. Broker kimlik bilgilerini ve `.creds` dosyalarını parola
+  gibi koruyun: sohbetlere, issue'lara, ekran görüntülerine veya loglara
+  yapıştırmayın.
+- **Kimlik bilgisi deposu kasa değildir.** Sırlar Chrome profilinin yerel eklenti
+  deposunda kalır; o profile erişen herkes onları okuyabilir. Chrome Sync
+  kullanılmaz, ancak bu disk üzerinde şifreleme anlamına gelmez.
+- **Açığa çıkan broker, açığa çıkan tarayıcıdır.** Yerel örnek tasarım gereği
+  kimlik doğrulamasız ve yalnızca loopback'tir. Başka bir makine broker'a
+  erişebildiğinde `infra/nats-auth.example.conf` ve TLS uygulayın; konu
+  izinlerini dar tutun.
+- `captcha` zorlukları algılar ve insanı uyarır; asla çözmez. Durdurma isteği
+  tıklamanın ortasında değil, bir sonraki adım sınırında uygulanır.
+
 ## Sorun giderme
 
 - **`no responders`** — o konuda abone eklenti yok. Profilin açık, eklentinin etkin
@@ -403,6 +428,10 @@ Linux veya WAN kabulünün yerini tutmaz.
 - [Mimari](docs/architecture.md) — topoloji, konular, kimlikler, alternatifler
 - [Komut referansı](docs/commands.md) — 41 verb ve hata kodları
 - [Doğrulama kaydı](docs/validation.tr.md) · [Validation record](docs/validation.md)
+
+Ana proje: [NATS](https://nats.io) ·
+[nats-server kaynağı](https://github.com/nats-io/nats-server) ·
+[Synadia Cloud dokümanları](https://docs.synadia.com/cloud/).
 
 Teknik referanslar:
 [NATS WebSocket istemcisi](https://nats-io.github.io/nats.js/core/index.html),

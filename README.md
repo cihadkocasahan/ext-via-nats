@@ -375,6 +375,29 @@ real browser, Linux or WAN acceptance.
   cryptographic gate.
 - A `.creds` file contains a JWT and an nkey seed. Treat it like a password.
 
+## Disclaimer
+
+This repository is a **usage example**, provided as is, without warranty of any
+kind. The authors accept no liability for damage, data loss, account actions or
+costs arising from its use.
+
+- **It drives a real, signed-in browser.** Commands can read page content, submit
+  forms, delete data, purchase things or send messages as you. Automate only
+  profiles you control, and only sites whose terms of service permit it.
+- **Sharing access is sharing identity.** Anyone holding a NATS credential that
+  can publish to a profile's `cmd` subject can act as you in every site that
+  profile is signed into. Treat broker credentials and `.creds` files like
+  passwords: never paste them into chats, issues, screenshots or logs.
+- **The credential store is not a vault.** Secrets stay in the Chrome profile's
+  local extension storage; anyone with access to that profile can read them.
+  Chrome Sync is not used, but that is not encryption at rest.
+- **An exposed broker is an exposed browser.** The local example is
+  unauthenticated and loopback-only by design. Before any other machine can reach
+  a broker, apply `infra/nats-auth.example.conf` plus TLS and keep subject
+  permissions narrow.
+- `captcha` detects challenges and warns a human; it never solves them. An abort
+  request takes effect at the next step boundary, not mid-click.
+
 ## Troubleshooting
 
 - **`no responders`** — no extension is subscribed on that subject. Check the
@@ -402,6 +425,10 @@ real browser, Linux or WAN acceptance.
 - [Architecture](docs/architecture.md) — topology, subjects, identities, alternatives
 - [Command reference](docs/commands.md) — all 41 verbs and failure codes
 - [Validation record](docs/validation.md) · [Doğrulama kaydı](docs/validation.tr.md)
+
+Upstream project: [NATS](https://nats.io) ·
+[nats-server source](https://github.com/nats-io/nats-server) ·
+[Synadia Cloud documentation](https://docs.synadia.com/cloud/).
 
 Technical references:
 [NATS WebSocket client](https://nats-io.github.io/nats.js/core/index.html),
